@@ -1,0 +1,244 @@
+"""
+report_gen.py
+-------------
+Takes the raw outputs from all scanner_core modules and assembles them
+into a single structured ScanReport object. Also calculates the overall
+risk score and deduplicates any overlapping findings.
+ 
+This is the last module called in a scan. It does no network requests —
+it only processes data that was already collected.
+"""
+
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+
+from .models import (
+    CVEResult,
+    DNSRecord,
+    HttpFinding,
+    OSINTResult,
+    PortResult,
+    ScanReport,
+    ScanStatus,
+    SubdomainResult,
+)
+
+logger = logging.getLogger(__name__)
+TOP_FINDINGS_LIMIT = 5
+
+
+def _collect_all_cves(ports: list[PortResult]) -> list[CVEResult]:
+    """Collect and deduplicate CVEs from all port scan results."""
+    best_by_id: dict[str, CVEResult] = {}
+    for port in ports or []:
+        for cve in port.cves or []:
+            existing = best_by_id.get(cve.cve_id)
+            if existing is None or (cve.cvss_score or 0.0) > (existing.cvss_score or 0.0):
+                best_by_id[cve.cve_id] = cve
+    results = sorted(best_by_id.values(), key=lambda c: c.cvss_score or 0.0, reverse=True)
+    return results
+
+
+def calculate_risk_score(
+    cves: list[CVEResult],
+    open_port_count: int,
+    http_findings: list[HttpFinding],
+) -> int:
+    """Calculate a 0-100 risk score based on CVEs, open ports, and HTTP issues."""
+    if not cves:
+        max_cvss = 0.0
+    else:
+        max_cvss = max((cve.cvss_score or 0.0) for cve in cves)
+    component_1 = (max_cvss / 10.0) * 40
+
+    critical_count = sum(1 for cve in cves if cve.severity.upper() == "CRITICAL")
+    high_count = sum(1 for cve in cves if cve.severity.upper() == "HIGH")
+    component_2 = min(critical_count * 10 + high_count * 5, 30)
+
+    component_3 = min(open_port_count * 1.5, 15)
+
+    total_missing_headers = sum(len(finding.missing_headers or []) for finding in http_findings or [])
+    component_4 = min(total_missing_headers * 2, 15)
+
+    final_score = int(component_1 + component_2 + component_3 + component_4)
+    return min(final_score, 100)
+
+
+def get_risk_label(score: int) -> str:
+    """Convert a numeric risk score into a risk label."""
+    if score >= 80:
+        return "CRITICAL"
+    if score >= 60:
+        return "HIGH"
+    if score >= 40:
+        return "MEDIUM"
+    if score >= 20:
+        return "LOW"
+    return "MINIMAL"
+
+
+def _build_severity_summary(cves: list[CVEResult]) -> dict[str, int]:
+    """Count CVEs by severity into a normalized summary dict."""
+    summary = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for cve in cves or []:
+        severity = (cve.severity or "").lower()
+        if severity in summary:
+            summary[severity] += 1
+    return summary
+
+
+def _get_top_findings(cves: list[CVEResult], limit: int = TOP_FINDINGS_LIMIT) -> list[CVEResult]:
+    """Return the top CVEs sorted by CVSS score descending."""
+    sorted_cves = sorted(cves or [], key=lambda c: c.cvss_score or 0.0, reverse=True)
+    return sorted_cves[:limit]
+
+
+def _parse_started_at(started_at: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO 8601 datetime string and return a UTC datetime."""
+    if not started_at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(started_at)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def generate_report(
+    scan_id: str,
+    target: str,
+    started_at: str,
+    ports: list[PortResult] = [],
+    osint: OSINTResult = None,
+    dns_records: list[DNSRecord] = [],
+    subdomains: list[SubdomainResult] = [],
+    http_findings: list[HttpFinding] = [],
+    errors: dict[str, str] = {},
+) -> ScanReport:
+    """Assemble all scan module outputs into a final ScanReport."""
+    try:
+        ports = ports or []
+        dns_records = dns_records or []
+        subdomains = subdomains or []
+        http_findings = http_findings or []
+        errors = errors or {}
+
+        cves = _collect_all_cves(ports)
+        score = calculate_risk_score(cves, len(ports), http_findings)
+        risk_label = get_risk_label(score)
+        severity_summary = _build_severity_summary(cves)
+        top_findings = _get_top_findings(cves)
+
+        started_dt = _parse_started_at(started_at)
+        now = datetime.now(timezone.utc)
+        scan_duration_seconds = None
+        if started_dt:
+            scan_duration_seconds = round((now - started_dt).total_seconds(), 2)
+
+        modules_run: list[str] = []
+        if ports:
+            modules_run.append("port_scanner")
+        if cves:
+            modules_run.append("cve_lookup")
+        if osint is not None and any([
+            osint.whois,
+            osint.shodan_ports,
+            osint.shodan_vulns,
+            osint.certificates,
+            osint.subdomains_from_certs,
+        ]):
+            modules_run.append("osint_fetcher")
+        if dns_records or subdomains:
+            modules_run.append("dns_enum")
+        if http_findings:
+            modules_run.append("service_probe")
+
+        report = ScanReport(
+            scan_id=scan_id,
+            target=target,
+            status=ScanStatus.COMPLETE,
+            risk_score=score,
+            risk_label=risk_label,
+            severity_summary=severity_summary,
+            ports=ports,
+            cves=cves,
+            dns_records=dns_records,
+            subdomains=subdomains,
+            osint=osint,
+            http_findings=http_findings,
+            top_findings=top_findings,
+            started_at=started_at,
+            completed_at=now.isoformat(),
+            scan_duration_seconds=scan_duration_seconds,
+            modules_run=modules_run,
+            errors=errors,
+        )
+        return report
+    except Exception as exc:
+        logger.error("report_gen: failed to assemble scan report: %s", exc)
+        return ScanReport(
+            scan_id=scan_id or str(uuid.uuid4()),
+            target=target,
+            status=ScanStatus.FAILED,
+            risk_score=None,
+            risk_label=None,
+            severity_summary={"critical": 0, "high": 0, "medium": 0, "low": 0},
+            ports=ports or [],
+            cves=[],
+            dns_records=dns_records or [],
+            subdomains=subdomains or [],
+            osint=osint,
+            http_findings=http_findings or [],
+            top_findings=[],
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc).isoformat(),
+            scan_duration_seconds=None,
+            modules_run=[],
+            errors={**(errors or {}), "report_gen": str(exc)},
+        )
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    demo_ports = [
+        PortResult(port=80, protocol="tcp", state="open", service="http", product="nginx", version="1.20.0", banner="nginx/1.20.0"),
+        PortResult(port=443, protocol="tcp", state="open", service="https", product="Apache", version="2.4.54", banner="Apache/2.4.54"),
+    ]
+    demo_ports[0].cves = [
+        CVEResult(
+            cve_id="CVE-2024-0001",
+            description="Example critical vulnerability.",
+            cvss_score=9.8,
+            cvss_version="3.1",
+            severity="CRITICAL",
+            published_date="2024-01-01",
+            references=["https://example.com/CVE-2024-0001"],
+        )
+    ]
+    demo_ports[1].cves = [
+        CVEResult(
+            cve_id="CVE-2024-0002",
+            description="Example high severity vulnerability.",
+            cvss_score=7.5,
+            cvss_version="3.1",
+            severity="HIGH",
+            published_date="2024-02-01",
+            references=["https://example.com/CVE-2024-0002"],
+        )
+    ]
+    demo_report = generate_report(
+        scan_id=str(uuid.uuid4()),
+        target="example.com",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        ports=demo_ports,
+        osint=None,
+        dns_records=[DNSRecord(record_type="A", name="example.com", value="93.184.216.34", ttl=3600)],
+        subdomains=[SubdomainResult(subdomain="www.example.com", ip_address="93.184.216.34", is_different_ip=False)],
+        http_findings=[HttpFinding(url="http://example.com", status_code=200, server_header="nginx/1.20.0", powered_by=None, cms_detected=None, missing_headers=["Content-Security-Policy", "Strict-Transport-Security"], cert=None)],
+        errors={},
+    )
+    print(demo_report.model_dump_json(indent=2))
