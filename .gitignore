@@ -1,0 +1,31 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+dist/
+.pytest_cache/
+
+# Node
+node_modules/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.production
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Alembic (keep the folder, ignore auto-generated versions if needed)
+# apps/api/db/migrations/versions/
+
+# IDE
+.vscode/
+.idea/
