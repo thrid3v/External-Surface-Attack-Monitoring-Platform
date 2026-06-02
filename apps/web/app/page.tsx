@@ -40,75 +40,131 @@
  * user interaction. Import it here and it works seamlessly.
  *
  * SHADCN COMPONENTS USED:
- *   Badge, Card, CardHeader, CardContent, Skeleton
+ *   Badge, Card, CardHeader, CardContent
  *
  * FILE SIZE TARGET: keep this under 80 lines.
  * It is a layout/composition file — all the real logic lives in components.
  */
 
+import Link from "next/link"
 
-import Image from "next/image";
+import ScanInputClient from "@/components/scan_input_client"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardHeader, CardContent } from "@/components/ui/card"
+import { getRecentScans, type RecentScan } from "@/lib/api"
 
-export default function Home() {
+function badgeVariant(label: string | null) {
+  switch (label) {
+    case "CRITICAL":
+      return "destructive"
+    case "LOW":
+      return "secondary"
+    case "MINIMAL":
+      return "outline"
+    default:
+      return "outline"
+  }
+}
+
+function badgeClass(label: string | null) {
+  if (label === "HIGH") {
+    return "border-orange-200 bg-orange-100 text-orange-900"
+  }
+  if (label === "MEDIUM") {
+    return "border-amber-200 bg-amber-100 text-amber-950"
+  }
+  return undefined
+}
+
+function formatTimeAgo(value: string) {
+  const diff = Date.now() - new Date(value).getTime()
+  if (Number.isNaN(diff) || diff < 0) {
+    return "Unknown"
+  }
+
+  const minutes = Math.floor(diff / 60000)
+  if (minutes < 1) return "Just now"
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
+}
+
+export default async function Home() {
+  const recentScans = await getRecentScans()
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="flex min-h-screen flex-col items-center bg-zinc-50 px-6 py-10 font-sans dark:bg-black">
+      <div className="w-full max-w-5xl space-y-8">
+        <section className="space-y-3">
+          <p className="text-sm uppercase tracking-[0.3em] text-muted-foreground">EASM Scanner</p>
+          <h1 className="text-4xl font-semibold text-slate-950 dark:text-white">External surface attack monitoring</h1>
+          <p className="max-w-2xl text-base text-slate-600 dark:text-slate-300">
+            Scan URLs, domains, or IP addresses and review recent findings from your last scans.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        </section>
+
+        <Card className="rounded-3xl border border-border bg-card">
+          <CardHeader className="gap-1 px-6 pt-6">
+            <div>
+              <p className="text-sm font-medium uppercase tracking-[0.2em] text-muted-foreground">New scan</p>
+              <h2 className="text-2xl font-semibold text-slate-950 dark:text-white">Enter a target</h2>
+            </div>
+          </CardHeader>
+          <CardContent className="px-6 pb-6 pt-4">
+            <ScanInputClient />
+          </CardContent>
+        </Card>
+
+        <section className="space-y-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-sm font-medium uppercase tracking-[0.2em] text-muted-foreground">Recent scans</p>
+              <h2 className="text-2xl font-semibold text-slate-950 dark:text-white">History</h2>
+            </div>
+          </div>
+
+          {recentScans.length === 0 ? (
+            <Card className="rounded-3xl border border-border bg-card">
+              <CardContent className="space-y-2 text-center px-6 py-10">
+                <p className="text-base font-semibold text-slate-950 dark:text-white">
+                  No scans yet — enter a URL or IP above to get started.
+                </p>
+                <p className="text-sm text-muted-foreground">Scans will appear here once they are queued.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid gap-3">
+              {recentScans.map((scan) => (
+                <Link
+                  key={scan.scan_id}
+                  href={`/scan/${scan.scan_id}`}
+                  className="group block rounded-3xl border border-border bg-card p-5 transition hover:border-primary/50 hover:bg-primary/5"
+                >
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium uppercase tracking-[0.15em] text-muted-foreground">{scan.target}</p>
+                      <p className="text-base font-semibold text-slate-950 dark:text-white">{scan.target}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant={badgeVariant(scan.risk_label)}
+                        className={badgeClass(scan.risk_label)}
+                      >
+                        {scan.risk_label ?? "UNKNOWN"}
+                      </Badge>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                        {scan.risk_score ?? "N/A"}
+                      </span>
+                      <span className="text-sm text-muted-foreground">{formatTimeAgo(scan.started_at)}</span>
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
-  );
+  )
 }
