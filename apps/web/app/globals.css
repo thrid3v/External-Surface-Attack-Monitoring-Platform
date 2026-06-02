@@ -1,3 +1,69 @@
+/**
+ * app/globals.css
+ * ---------------
+ * Global stylesheet. Imported once in layout.tsx.
+ * Three sections: Tailwind directives, shadcn CSS variables, print styles.
+ *
+ * SECTION 1 — Tailwind directives (must be first, do not remove):
+ *   @tailwind base;
+ *   @tailwind components;
+ *   @tailwind utilities;
+ *
+ * SECTION 2 — shadcn CSS variables:
+ *   shadcn generates these when you run "npx shadcn init".
+ *   They define colors for light and dark mode.
+ *   Do not delete them — shadcn components depend on them.
+ *   You will find them already in this file after running shadcn init.
+ *   Leave them exactly as generated.
+ *
+ * SECTION 3 — Custom base styles:
+ *   A few small additions for the app:
+ *
+ *   Severity color utilities (used across multiple components):
+ *     .severity-critical { color: rgb(239 68 68);  }    red-500
+ *     .severity-high     { color: rgb(249 115 22); }    orange-500
+ *     .severity-medium   { color: rgb(234 179 8);  }    yellow-500
+ *     .severity-low      { color: rgb(59 130 246); }    blue-500
+ *     .severity-minimal  { color: rgb(107 114 128);}    gray-500
+ *
+ *   Background variants (for score circles and stat boxes):
+ *     .bg-severity-critical { background-color: rgb(254 242 242); }
+ *     .bg-severity-high     { background-color: rgb(255 247 237); }
+ *     .bg-severity-medium   { background-color: rgb(254 252 232); }
+ *     .bg-severity-low      { background-color: rgb(239 246 255); }
+ *     .bg-severity-minimal  { background-color: rgb(249 250 251); }
+ *
+ * SECTION 4 — Print styles (used by ReportExport.tsx):
+ *   @media print {
+ *     Hide elements that should not appear in the printed report:
+ *       nav              (top navigation bar)
+ *       .no-print        (apply this class to: scan button, export buttons,
+ *                         tab nav bar, filter buttons, progress bar)
+ *
+ *     Force all tab content to show (not just the active tab):
+ *       [role="tabpanel"] { display: block !important; }
+ *
+ *     Add a print header showing target and date:
+ *       .print-report::before {
+ *         content: "EASM Security Report — " attr(data-target) " — " attr(data-date);
+ *         display: block;
+ *         font-size: 18px;
+ *         font-weight: bold;
+ *         margin-bottom: 24px;
+ *         border-bottom: 2px solid black;
+ *         padding-bottom: 8px;
+ *       }
+ *     Set data-target and data-date on the results page container div.
+ *
+ *     Prevent page breaks inside cards:
+ *       .card { break-inside: avoid; }
+ *
+ *     Remove shadows and borders that look bad in print:
+ *       * { box-shadow: none !important; }
+ *   }
+ */
+
+
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";

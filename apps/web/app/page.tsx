@@ -1,3 +1,52 @@
+/**
+ * app/page.tsx
+ * ------------
+ * The homepage. First thing users see when they open the app.
+ * Two responsibilities: accept a new scan target, show recent scan history.
+ *
+ * LAYOUT (top to bottom):
+ *   1. Header bar — app name "EASM Scanner" + tagline
+ *   2. ScanInput component — the main search box
+ *   3. Recent scans list — last 20 scans from GET /api/scans
+ *
+ * BEHAVIOUR:
+ *
+ *   On load:
+ *     Call getRecentScans() from lib/api.ts and display the results
+ *     in a list below the search box. Show a Skeleton loader while
+ *     the data is fetching. If the list is empty, show a friendly
+ *     empty state: "No scans yet — enter a URL or IP above to get started."
+ *
+ *   When ScanInput submits:
+ *     ScanInput calls startScan() and receives a scan_id back.
+ *     Use Next.js router.push() to navigate to /scan/{scan_id}.
+ *     The results page handles all polling and display from there.
+ *     Pass an onScan callback prop to ScanInput for this navigation.
+ *
+ *   Recent scans list:
+ *     Each item shows: target, risk_label badge, risk_score, time ago.
+ *     Clicking a row navigates to /scan/{scan_id}.
+ *     Use the Badge component for risk_label.
+ *     Color the badge by severity:
+ *       CRITICAL → destructive variant
+ *       HIGH     → orange (custom class or inline style)
+ *       MEDIUM   → warning yellow
+ *       LOW      → secondary
+ *       MINIMAL  → outline
+ *
+ * THIS IS A SERVER COMPONENT by default in Next.js App Router.
+ * The recent scans fetch can happen server-side — no useEffect needed.
+ * ScanInput must be a Client Component ("use client") because it handles
+ * user interaction. Import it here and it works seamlessly.
+ *
+ * SHADCN COMPONENTS USED:
+ *   Badge, Card, CardHeader, CardContent, Skeleton
+ *
+ * FILE SIZE TARGET: keep this under 80 lines.
+ * It is a layout/composition file — all the real logic lives in components.
+ */
+
+
 import Image from "next/image";
 
 export default function Home() {

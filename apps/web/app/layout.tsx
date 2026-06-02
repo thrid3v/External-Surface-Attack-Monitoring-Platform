@@ -1,3 +1,58 @@
+/**
+ * app/layout.tsx
+ * --------------
+ * The root layout. Next.js App Router requires this file to exist —
+ * the app will not compile without it. Every page in the app is
+ * wrapped by this layout automatically.
+ *
+ * WHAT GOES HERE:
+ *   - <html> and <body> tags (required, must be here and nowhere else)
+ *   - Global font setup via next/font
+ *   - The top navigation bar shown on every page
+ *   - Any global context providers (if you add auth or theming later)
+ *
+ * FONT SETUP:
+ *   Use next/font/google to load Inter (clean, readable, works for
+ *   technical/security dashboards):
+ *     import { Inter } from "next/font/google"
+ *     const inter = Inter({ subsets: ["latin"] })
+ *   Apply it via className on the <body> tag.
+ *   This loads the font at build time — no layout shift, no flash.
+ *
+ * NAVIGATION BAR (simple, fixed top):
+ *   Left side:  App name "EASM Scanner" linking back to "/"
+ *   Right side: "Docs" link (placeholder for now) + GitHub icon link
+ *   Keep it minimal — one line, no dropdowns.
+ *   Use a <nav> element with border-bottom for separation.
+ *
+ * METADATA:
+ *   Export a metadata object for SEO and browser tab title:
+ *     export const metadata = {
+ *       title: "EASM Scanner",
+ *       description: "External Attack Surface Management — scan URLs and IPs for vulnerabilities",
+ *     }
+ *
+ * STRUCTURE:
+ *   <html lang="en">
+ *     <body className={inter.className}>
+ *       <nav>...</nav>
+ *       <main className="container mx-auto px-4 py-8">
+ *         {children}
+ *       </main>
+ *     </body>
+ *   </html>
+ *
+ * NOTE:
+ *   This is a Server Component by default — do not add "use client".
+ *   If you need client-side state in the nav (e.g. mobile menu toggle),
+ *   extract the nav into a separate NavBar client component and import it here.
+ *
+ * SHADCN COMPONENTS USED:
+ *   None — keep this file plain HTML/Tailwind for simplicity.
+ */
+
+
+
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Figtree } from "next/font/google";
 import "./globals.css";
