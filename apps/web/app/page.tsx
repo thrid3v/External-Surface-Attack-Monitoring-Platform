@@ -53,6 +53,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardContent } from "@/components/ui/card"
 import { getRecentScans, type RecentScan } from "@/lib/api"
 
+
 function badgeVariant(label: string | null) {
   switch (label) {
     case "CRITICAL":
@@ -152,7 +153,7 @@ export default async function Home() {
                         className={badgeClass(scan.risk_label)}
                       >
                         {scan.risk_label ?? "UNKNOWN"}
-                      </Badge>
+                      </Badge>                    
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                         {scan.risk_score ?? "N/A"}
                       </span>

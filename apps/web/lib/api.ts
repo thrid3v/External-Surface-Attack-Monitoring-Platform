@@ -42,3 +42,19 @@ export async function getRecentScans() {
   return apiFetch<RecentScan[]>("/api/scans")
 }
 
+export interface ScanStatus {
+  scan_id: string
+  status: string
+  current_module?: string | null
+  modules_complete?: string[]
+  started_at?: string
+}
+
+export async function getScanStatus(scan_id: string) {
+  return apiFetch<ScanStatus>(`/api/scans/${scan_id}/status`)
+}
+
+export async function getScanReport(scan_id: string) {
+  return apiFetch<any>(`/api/scans/${scan_id}`)
+}
+
