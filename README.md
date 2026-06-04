@@ -340,7 +340,6 @@ Open a new terminal:
 
 ```bash
 cd apps/api
-
 python -m venv venv
 ```
 
@@ -348,12 +347,14 @@ python -m venv venv
 
 ```powershell
 venv\Scripts\Activate.ps1
+$env:PYTHONPATH="$PWD"
 ```
 
 ### Linux / macOS
 
 ```bash
 source venv/bin/activate
+export PYTHONPATH="$PWD"
 ```
 
 Install dependencies:
@@ -365,7 +366,7 @@ pip install -r requirements.txt
 Run the API:
 
 ```bash
-uvicorn main:app --reload
+uvicorn main:app --reload --port 8000
 ```
 
 API will be available at:
@@ -388,17 +389,49 @@ Activate the virtual environment:
 
 ```powershell
 venv\Scripts\Activate.ps1
+$env:PYTHONPATH="$PWD"
 ```
 
-Run:
+For Windows, run Celery with the solo pool:
+
+```powershell
+celery -A workers.scan_worker worker --loglevel=info -P solo
+```
+
+For Linux / macOS:
 
 ```bash
+export PYTHONPATH="$PWD"
 celery -A workers.scan_worker worker --loglevel=info
 ```
 
 ---
 
-## 7. Start the MCP Server
+## 7. Verify the Scan API
+
+Create a scan with permission confirmed:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/scans \
+  -H "Content-Type: application/json" \
+  -d '{"target":"example.com","port_range":"1-100","i_own_this_target":true}'
+```
+
+Poll the scan status:
+
+```bash
+curl http://127.0.0.1:8000/api/scans/<scan_id>/status
+```
+
+Fetch the completed report:
+
+```bash
+curl http://127.0.0.1:8000/api/scans/<scan_id>
+```
+
+---
+
+## 8. Start the MCP Server
 
 Open a new terminal:
 

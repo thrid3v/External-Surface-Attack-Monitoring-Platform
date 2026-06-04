@@ -1,134 +1,216 @@
-"""
-workers/scan_worker.py
------------------------
-The Celery task that actually runs the scan.
-This is the bridge between the API (which queues jobs) and
-scanner_core (which does the work).
- 
-When POST /api/scans is called, it queues this task.
-Celery picks it up from the Redis queue and runs it in a
-background worker process — completely separate from the API process.
- 
-HOW CELERY WORKS HERE:
-  The API process calls:     run_scan.delay(scan_id, target, port_range)
-  Celery worker picks it up: runs run_scan(scan_id, target, port_range)
-  Results are written to:    PostgreSQL (not Celery's result backend)
- 
-CONTAINS:
- 
-  celery_app = Celery(...)
-    Create the Celery app instance.
-    Broker:  Redis (REDIS_URL from env) — where tasks are queued
-    Backend: Redis (REDIS_URL from env) — where task states are stored
-    Configure task_serializer="json" and accept_content=["json"]
- 
-  @celery_app.task(bind=True, name="run_scan")
-  def run_scan(self, scan_id: str, target: str, port_range: str = "1-1000")
-  ---------------------------------------------------------------------------
-  The main Celery task. bind=True gives access to self for status updates.
- 
-  Steps in order:
-    1. Open a database session
-       Update the scan record: status="running", started_at=now()
- 
-    2. Initialize an errors dict: errors = {}
- 
-    3. Run port_scanner
-       Try:
-         ports = scan_ports(target, port_range)
-         _update_scan_progress(scan_id, "port_scanner", db)
-       Except:
-         errors["port_scanner"] = str(e)
-         ports = []
- 
-    4. Run cve_lookup for each port that has a product+version
-       Try:
-         for port in ports:
-             if port.product and port.version:
-                 port.cves = lookup_cves(port.product, port.version)
-         _update_scan_progress(scan_id, "cve_lookup", db)
-       Except:
-         errors["cve_lookup"] = str(e)
- 
-    5. Run dns_enum
-       Try:
-         dns_data = run_dns_enum(target)
-         dns_records = dns_data.get("dns_records", [])
-         subdomains = dns_data.get("subdomains", [])
-         _update_scan_progress(scan_id, "dns_enum", db)
-       Except:
-         errors["dns_enum"] = str(e)
-         dns_records, subdomains = [], []
- 
-    6. Run osint_fetcher
-       Try:
-         osint = fetch_all(target)
-         _update_scan_progress(scan_id, "osint_fetcher", db)
-       Except:
-         errors["osint_fetcher"] = str(e)
-         osint = None
- 
-    7. Run service_probe
-       Try:
-         http_findings = probe_all_http_ports(target, ports)
-         _update_scan_progress(scan_id, "service_probe", db)
-       Except:
-         errors["service_probe"] = str(e)
-         http_findings = []
- 
-    8. Run report_gen
-       report = generate_report(
-           scan_id=scan_id,
-           target=target,
-           started_at=<the started_at from step 1>,
-           ports=ports,
-           osint=osint,
-           dns_records=dns_records,
-           subdomains=subdomains,
-           http_findings=http_findings,
-           errors=errors
-       )
- 
-    9. Save report to database
-       Update the scan record:
-         status = "complete"
-         completed_at = now()
-         result_json = report.model_dump_json()
-         risk_score = report.risk_score
-         risk_label = report.risk_label
- 
-    10. Close the database session
- 
-  FAILURE HANDLING:
-    Wrap the entire task in a top-level try/except.
-    If anything catastrophic happens (db connection lost etc.):
-      Update scan record: status="failed", error_message=str(e)
-    Never let the task crash silently — always update the DB status.
- 
-  def _update_scan_progress(scan_id: str, module_name: str, db: Session)
-  ------------------------------------------------------------------------
-  Private helper called after each module completes.
-  Updates the scan record's current_module field in the database
-  so the frontend progress bar can show which module is running.
-  Example: current_module = "cve_lookup"
- 
-HOW TO RUN THE WORKER (separate terminal from the API):
-  cd apps/api
-  venv/Scripts/Activate.ps1
-  celery -A workers.scan_worker worker --loglevel=info
- 
-  You should see:
-    [tasks]
-      . run_scan
-    [2024-...] celery@hostname ready.
- 
-IMPORTANT:
-  - Import scanner_core modules at the top of this file — they are
-    available because scanner_core is in the Python path.
-  - Each step must be independent. If port_scanner fails, cve_lookup,
-    dns_enum etc. must still run. The errors dict captures what failed.
-  - Log the start and end of every step with logger.info() including
-    how many results were returned e.g. "port_scanner: 7 open ports found"
-  - Add a SCAN_TIMEOUT environment variable (default 300 seconds).
-    If the full task takes longer than this, mark it as failed.
-"""
+import json
+import logging
+import os
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from celery import Celery
+from celery.exceptions import Reject
+from dotenv import load_dotenv
+from sqlalchemy.orm import Session
+
+# Ensure the API package and local scanner_core package are on the import path.
+API_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = API_ROOT.parent.parent
+PACKAGES_ROOT = PROJECT_ROOT / "packages"
+
+for path in (str(API_ROOT), str(PACKAGES_ROOT)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+from db.models import Scan, SessionLocal
+from scanner_core.cve_lookup import lookup_cves
+from scanner_core.dns_enum import run_dns_enum
+from scanner_core.osint_fetcher import fetch_all
+from scanner_core.port_scanner import scan_ports
+from scanner_core.report_gen import generate_report
+from scanner_core.service_probe import probe_all_http_ports
+
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+SCAN_TIMEOUT_SECONDS = int(os.getenv("SCAN_TIMEOUT", "300"))
+
+# Initialise DB engine for worker process if available. Do not raise
+# here — allow the worker to start even if DATABASE_URL is not set.
+from db.models import init_db
+init_db()
+
+celery_app = Celery(
+    "workers.scan_worker",
+    broker=REDIS_URL,
+    backend=REDIS_URL,
+)
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+)
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+MODULE_ORDER = [
+    "port_scanner",
+    "cve_lookup",
+    "dns_enum",
+    "osint_fetcher",
+    "service_probe",
+]
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _format_datetime(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _commit_scan(db: Session, scan: Scan) -> None:
+    db.add(scan)
+    db.commit()
+    db.refresh(scan)
+
+
+def _update_scan_progress(db: Session, scan: Scan, module_name: str) -> None:
+    scan.current_module = module_name
+    _commit_scan(db, scan)
+    logger.info("scan_worker: scan=%s current_module=%s", scan.id, module_name)
+
+
+def _maybe_fail_on_timeout(db: Session, scan: Scan, start_time: float) -> bool:
+    elapsed = time.monotonic() - start_time
+    if elapsed > SCAN_TIMEOUT_SECONDS:
+        scan.status = "failed"
+        scan.error_message = f"Scan timed out after {elapsed:.1f} seconds"
+        scan.completed_at = _now()
+        _commit_scan(db, scan)
+        logger.error("scan_worker: scan=%s timed out after %s seconds", scan.id, elapsed)
+        return True
+    return False
+
+
+@celery_app.task(bind=True, name="run_scan")
+def run_scan(self, scan_id: str, target: str, port_range: str = "1-1000", modules: list[str] | None = None) -> dict[str, str]:
+    allowed_modules = [module for module in (modules or MODULE_ORDER) if module in MODULE_ORDER]
+    if not allowed_modules:
+        allowed_modules = MODULE_ORDER.copy()
+
+    db = SessionLocal()
+    try:
+        scan = db.query(Scan).filter(Scan.id == scan_id).first()
+        if scan is None:
+            message = f"Scan not found: {scan_id}"
+            logger.error("scan_worker: %s", message)
+            raise Reject(message, requeue=False)
+
+        scan.status = "running"
+        scan.started_at = _now()
+        scan.error_message = None
+        scan.current_module = allowed_modules[0]
+        _commit_scan(db, scan)
+
+        start_time = time.monotonic()
+        ports: list = []
+        dns_records: list = []
+        subdomains: list = []
+        osint = None
+        http_findings: list = []
+        errors: dict[str, str] = {}
+
+        if "port_scanner" in allowed_modules:
+            try:
+                ports = scan_ports(target, port_range)
+                _update_scan_progress(db, scan, "port_scanner")
+            except Exception as exc:
+                errors["port_scanner"] = str(exc)
+                ports = []
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "cve_lookup" in allowed_modules:
+            try:
+                for port in ports:
+                    if getattr(port, "product", None) and getattr(port, "version", None):
+                        port.cves = lookup_cves(port.product, port.version)
+                _update_scan_progress(db, scan, "cve_lookup")
+            except Exception as exc:
+                errors["cve_lookup"] = str(exc)
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "dns_enum" in allowed_modules:
+            try:
+                dns_data = run_dns_enum(target)
+                dns_records = dns_data.get("dns_records", []) if isinstance(dns_data, dict) else []
+                subdomains = dns_data.get("subdomains", []) if isinstance(dns_data, dict) else []
+                _update_scan_progress(db, scan, "dns_enum")
+            except Exception as exc:
+                errors["dns_enum"] = str(exc)
+                dns_records = []
+                subdomains = []
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "osint_fetcher" in allowed_modules:
+            try:
+                osint = fetch_all(target)
+                _update_scan_progress(db, scan, "osint_fetcher")
+            except Exception as exc:
+                errors["osint_fetcher"] = str(exc)
+                osint = None
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "service_probe" in allowed_modules:
+            try:
+                http_findings = probe_all_http_ports(target, ports)
+                _update_scan_progress(db, scan, "service_probe")
+            except Exception as exc:
+                errors["service_probe"] = str(exc)
+                http_findings = []
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        report = generate_report(
+            scan_id=scan_id,
+            target=target,
+            started_at=_format_datetime(scan.started_at),
+            ports=ports,
+            osint=osint,
+            dns_records=dns_records,
+            subdomains=subdomains,
+            http_findings=http_findings,
+            errors=errors,
+        )
+
+        scan.status = "complete"
+        scan.completed_at = _now()
+        scan.result_json = report.model_dump_json()
+        scan.risk_score = report.risk_score
+        scan.risk_label = report.risk_label
+        scan.current_module = None
+        _commit_scan(db, scan)
+
+        logger.info("scan_worker: scan=%s complete status=complete", scan_id)
+        return {"status": "complete"}
+    except Exception as exc:
+        if 'scan' in locals() and scan is not None:
+            scan.status = "failed"
+            scan.error_message = str(exc)
+            scan.completed_at = _now()
+            _commit_scan(db, scan)
+        logger.exception("scan_worker: scan=%s failed with exception", scan_id)
+        raise
+    finally:
+        db.close()
