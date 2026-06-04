@@ -9,20 +9,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
+from constants import MODULE_ORDER
 from db.models import Scan
 from deps import get_db
+from utils import format_datetime
 from workers.scan_worker import run_scan
 
 router = APIRouter()
 
 VALID_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9.-]+$")
-MODULE_ORDER = [
-    "port_scanner",
-    "cve_lookup",
-    "dns_enum",
-    "osint_fetcher",
-    "service_probe",
-]
 
 
 class ScanCreate(BaseModel):
@@ -78,11 +73,13 @@ def _validate_and_clean_target(raw_target: str) -> str:
     return target
 
 
-def _format_datetime(value: datetime | None) -> str | None:
-    return value.astimezone(timezone.utc).isoformat() if value else None
-
-
 def _get_modules_complete(current_module: str | None, status: str) -> list[str]:
+    """Return modules that have finished running.
+
+    ``current_module`` is the module *currently executing* (set by the worker
+    before it starts that module).  Everything before it in MODULE_ORDER is
+    therefore complete.  When the scan is finished, all modules are complete.
+    """
     if status == "complete":
         return MODULE_ORDER.copy()
     if not current_module:
@@ -90,6 +87,7 @@ def _get_modules_complete(current_module: str | None, status: str) -> list[str]:
     completed = []
     for module in MODULE_ORDER:
         if module == current_module:
+            # current_module is still running — stop here
             break
         completed.append(module)
     return completed
@@ -114,7 +112,7 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db)) -> ScanQueue
     )
     db.add(scan)
     db.commit()
-    run_scan.delay(scan_id, target, payload.port_range, payload.modules or MODULE_ORDER)
+    run_scan.delay(scan_id, target, payload.port_range, payload.modules or list(MODULE_ORDER))
 
     return ScanQueuedResponse(
         scan_id=scan_id,
@@ -133,7 +131,7 @@ def get_scan(scan_id: str, db: Session = Depends(get_db)) -> Any:
         return {
             "scan_id": scan.id,
             "status": scan.status,
-            "started_at": _format_datetime(scan.started_at),
+            "started_at": format_datetime(scan.started_at),
         }
     if scan.status == "failed":
         return {
@@ -163,7 +161,7 @@ def get_scan_status(scan_id: str, db: Session = Depends(get_db)) -> ScanStatusRe
         status=scan.status,
         current_module=scan.current_module,
         modules_complete=_get_modules_complete(scan.current_module, scan.status),
-        started_at=_format_datetime(scan.started_at),
+        started_at=format_datetime(scan.started_at),
     )
 
 
@@ -183,7 +181,7 @@ def list_scans(db: Session = Depends(get_db)) -> list[ScanSummary]:
             status=scan.status,
             risk_score=scan.risk_score,
             risk_label=scan.risk_label,
-            started_at=_format_datetime(scan.started_at),
+            started_at=format_datetime(scan.started_at),
         )
         for scan in scans
     ]

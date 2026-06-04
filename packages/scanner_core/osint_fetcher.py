@@ -70,8 +70,8 @@ import logging
 import os
 import re
 import socket
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -168,8 +168,11 @@ def _format_whois_record(record: dict[str, Any]) -> WHOISInfo:
     )
 
 
-def fetch_whois(target: str) -> WHOISInfo:
-    """Query WHOIS for target registration and ownership data."""
+def fetch_whois(target: str) -> Optional[WHOISInfo]:
+    """Query WHOIS for target registration and ownership data.
+
+    Returns ``None`` when the whois library is unavailable or the lookup fails.
+    """
     if whois_lib is None:
         logger.warning("osint_fetcher: python-whois package is not installed")
         return None
@@ -311,8 +314,12 @@ def _compute_certificate_liveness(cert: CertInfo) -> CertInfo:
     if cert.valid_to:
         try:
             expiry = datetime.fromisoformat(cert.valid_to)
-            cert.days_until_expiry = int((expiry - datetime.utcnow()).total_seconds() / 86400)
-            cert.is_expired = expiry < datetime.utcnow()
+            # Ensure expiry is timezone-aware before comparison.
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            cert.days_until_expiry = int((expiry - now).total_seconds() / 86400)
+            cert.is_expired = expiry < now
         except ValueError:
             cert.days_until_expiry = None
     return cert
