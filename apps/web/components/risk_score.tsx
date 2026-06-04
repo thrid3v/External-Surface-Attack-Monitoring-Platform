@@ -1,57 +1,181 @@
-/**
- * components/RiskScore.tsx
- * ------------------------
- * Displays the overall risk score prominently at the top of the results page.
- * The first thing a user sees after a scan completes.
- *
- * PROPS:
- *   score: number          0-100 integer
- *   label: string          "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "MINIMAL"
- *   severitySummary: Record<string, number>
- *     e.g. { critical: 2, high: 5, medium: 3, low: 1 }
- *   target: string         shown as a subtitle
- *
- * LAYOUT:
- *   A wide Card containing two columns:
- *
- *   LEFT COLUMN:
- *     - Large number: the score (e.g. "72")
- *       Font size should be very large — use text-7xl or text-8xl.
- *       Color the number by severity (see color mapping below).
- *     - The risk label below the number in a Badge.
- *     - The target domain in small muted text below that.
- *
- *   RIGHT COLUMN:
- *     Four small stat boxes, one per severity:
- *       CRITICAL: count in red
- *       HIGH:     count in orange
- *       MEDIUM:   count in yellow
- *       LOW:      count in blue/muted
- *     Each box shows the count large and the label small below it.
- *
- * SEVERITY COLOR MAPPING:
- *   CRITICAL → text-red-500   / bg-red-50
- *   HIGH     → text-orange-500 / bg-orange-50
- *   MEDIUM   → text-yellow-500 / bg-yellow-50
- *   LOW      → text-blue-500  / bg-blue-50
- *   MINIMAL  → text-gray-500  / bg-gray-50
- *
- *   Apply the matching color to the big score number and to the
- *   border-left of the card for a strong visual signal.
- *
- * ANIMATION (optional but impactful):
- *   Animate the score number counting up from 0 to the final value
- *   when the component mounts. Use a simple useEffect with an interval
- *   that increments a display value by ~2 per frame until it reaches
- *   the real score. Duration: ~800ms.
- *   This makes the score feel dynamic rather than just appearing.
- *   If you implement this, the component needs "use client".
- *
- * SHADCN COMPONENTS USED:
- *   Card, CardContent, Badge
- *
- * NOTE:
- *   This is a display-only component — no API calls, no state beyond
- *   the optional count-up animation. Keep it simple and visually striking.
- *   A security person should be able to read the risk at a glance.
- */
+"use client";
+
+import { useEffect, useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+
+type SeverityLabel = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "MINIMAL";
+
+interface RiskScoreProps {
+  score: number;
+  label: SeverityLabel;
+  severitySummary: Record<string, number>;
+  target: string;
+}
+
+interface SeverityConfig {
+  textColor: string;
+  bgColor: string;
+  borderColor: string;
+  badgeClass: string;
+}
+
+const SEVERITY_CONFIG: Record<SeverityLabel, SeverityConfig> = {
+  CRITICAL: {
+    textColor: "text-red-500",
+    bgColor: "bg-red-50",
+    borderColor: "border-red-500",
+    badgeClass: "bg-red-100 text-red-700 border-red-200",
+  },
+  HIGH: {
+    textColor: "text-orange-500",
+    bgColor: "bg-orange-50",
+    borderColor: "border-orange-500",
+    badgeClass: "bg-orange-100 text-orange-700 border-orange-200",
+  },
+  MEDIUM: {
+    textColor: "text-yellow-500",
+    bgColor: "bg-yellow-50",
+    borderColor: "border-yellow-500",
+    badgeClass: "bg-yellow-100 text-yellow-700 border-yellow-200",
+  },
+  LOW: {
+    textColor: "text-blue-500",
+    bgColor: "bg-blue-50",
+    borderColor: "border-blue-500",
+    badgeClass: "bg-blue-100 text-blue-700 border-blue-200",
+  },
+  MINIMAL: {
+    textColor: "text-gray-500",
+    bgColor: "bg-gray-50",
+    borderColor: "border-gray-400",
+    badgeClass: "bg-gray-100 text-gray-700 border-gray-200",
+  },
+};
+
+interface StatBoxProps {
+  count: number;
+  severityLabel: string;
+  textColor: string;
+  bgColor: string;
+}
+
+function StatBox({ count, severityLabel, textColor, bgColor }: StatBoxProps) {
+  return (
+    <div
+      className={`flex flex-col items-center justify-center rounded-lg p-3 ${bgColor} min-w-[72px]`}
+    >
+      <span className={`text-3xl font-bold leading-none ${textColor}`}>
+        {count}
+      </span>
+      <span className="mt-1 text-xs font-medium uppercase tracking-wide text-gray-500">
+        {severityLabel}
+      </span>
+    </div>
+  );
+}
+
+const STAT_SEVERITIES: {
+  key: string;
+  label: string;
+  textColor: string;
+  bgColor: string;
+}[] = [
+  {
+    key: "critical",
+    label: "Critical",
+    textColor: "text-red-500",
+    bgColor: "bg-red-50",
+  },
+  {
+    key: "high",
+    label: "High",
+    textColor: "text-orange-500",
+    bgColor: "bg-orange-50",
+  },
+  {
+    key: "medium",
+    label: "Medium",
+    textColor: "text-yellow-500",
+    bgColor: "bg-yellow-50",
+  },
+  {
+    key: "low",
+    label: "Low",
+    textColor: "text-blue-500",
+    bgColor: "bg-blue-50",
+  },
+];
+
+export default function RiskScore({
+  score,
+  label,
+  severitySummary,
+  target,
+}: RiskScoreProps) {
+  const [displayScore, setDisplayScore] = useState(0);
+
+  const config = SEVERITY_CONFIG[label] ?? SEVERITY_CONFIG.MINIMAL;
+
+  useEffect(() => {
+    if (score === 0) {
+      setDisplayScore(0);
+      return;
+    }
+
+    const totalDuration = 800; // ms
+    const increment = 2;
+    const steps = Math.ceil(score / increment);
+    const intervalMs = totalDuration / steps;
+
+    let current = 0;
+    const timer = setInterval(() => {
+      current += increment;
+      if (current >= score) {
+        setDisplayScore(score);
+        clearInterval(timer);
+      } else {
+        setDisplayScore(current);
+      }
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [score]);
+
+  return (
+    <Card
+      className={`w-full overflow-hidden border-l-4 ${config.borderColor} shadow-md`}
+    >
+      <CardContent className="flex flex-col gap-6 p-6 sm:flex-row sm:items-center sm:justify-between">
+        {/* LEFT COLUMN */}
+        <div className="flex flex-col items-start gap-2">
+          <span
+            className={`text-8xl font-extrabold leading-none tracking-tight ${config.textColor}`}
+          >
+            {displayScore}
+          </span>
+          <Badge
+            variant="outline"
+            className={`mt-1 px-3 py-1 text-sm font-semibold uppercase tracking-wider ${config.badgeClass}`}
+          >
+            {label}
+          </Badge>
+          <p className="text-sm text-muted-foreground">{target}</p>
+        </div>
+
+        {/* RIGHT COLUMN */}
+        <div className="flex flex-wrap gap-3 sm:justify-end">
+          {STAT_SEVERITIES.map(({ key, label: statLabel, textColor, bgColor }) => (
+            <StatBox
+              key={key}
+              count={severitySummary[key] ?? 0}
+              severityLabel={statLabel}
+              textColor={textColor}
+              bgColor={bgColor}
+            />
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
