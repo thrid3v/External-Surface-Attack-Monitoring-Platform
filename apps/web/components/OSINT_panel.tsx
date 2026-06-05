@@ -1,63 +1,393 @@
-/**
- * components/OSINTPanel.tsx
- * -------------------------
- * Displays OSINT and DNS findings in the "OSINT & DNS" tab.
- * Shown in app/scan/[id]/page.tsx inside the Tabs component.
- *
- * PROPS:
- *   osint: OSINTResult | null
- *     Contains: whois, shodan_ports, shodan_org, shodan_country,
- *               certificates, subdomains_from_certs
- *   dnsRecords: DNSRecord[]
- *     List of DNS records: { record_type, name, value, ttl }
- *   subdomains: SubdomainResult[]
- *     List of discovered subdomains: { subdomain, ip_address, is_different_ip }
- *
- * LAYOUT — three sections stacked vertically:
- *
- *   SECTION 1: WHOIS (Card)
- *     Grid of labeled fields:
- *       Registrar | Registrant Org | Created | Expires | Name Servers | Country
- *     If osint or osint.whois is null: show "WHOIS data unavailable".
- *     If whois.is_expired is true: show a red warning badge "DOMAIN EXPIRED"
- *     next to the expiry date — expired domains are a takeover risk.
- *
- *   SECTION 2: DNS Records (Card with Table)
- *     Table columns: Type | Name | Value | TTL
- *     Group rows by record_type — show all A records together, then MX etc.
- *     Highlight any TXT records that contain "spf" or "dkim" — these are
- *     important security records. Show a green checkmark if SPF is present,
- *     red warning if absent (email spoofing risk).
- *
- *   SECTION 3: Subdomains discovered (Card)
- *     Two sub-sections side by side:
- *
- *     Left — "From DNS brute-force" (subdomains prop):
- *       List each subdomain with its resolved IP.
- *       Flag any where is_different_ip is true with a yellow badge
- *       "Different IP" — these are worth investigating.
- *
- *     Right — "From certificate logs" (osint.subdomains_from_certs):
- *       List of subdomains found in certificate transparency logs.
- *       These are historically issued certs — may reveal old/forgotten
- *       subdomains that are no longer active but still interesting.
- *
- *     If both lists are empty: "No subdomains discovered"
- *
- *   SECTION 4: Shodan data (Card) — only shown if shodan data is present:
- *     Org, Country, ports Shodan has seen, any CVEs Shodan flagged.
- *     Add a note: "Data from Shodan's last scan — may not reflect current state"
- *
- * EMPTY STATE:
- *   If osint is null and dnsRecords is empty:
- *   "OSINT data unavailable — check your API keys in .env"
- *
- * SHADCN COMPONENTS USED:
- *   Card, CardHeader, CardContent, CardTitle
- *   Table, TableHeader, TableRow, TableHead, TableBody, TableCell
- *   Badge, Separator
- *
- * NOTE:
- *   This is a display-only component. No "use client" needed unless
- *   you add interactive filtering. All data comes via props.
- */
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { CheckCircle2, AlertTriangle } from "lucide-react";
+
+// ---------------------------------------------------------------------------
+// Local interfaces — scoped to fields documented in the specification only
+// ---------------------------------------------------------------------------
+
+interface WHOISData {
+  registrar: string | null;
+  registrant_org: string | null;
+  created: string | null;
+  expires: string | null;
+  name_servers: string[] | null;
+  country: string | null;
+  is_expired: boolean;
+}
+
+interface OSINTResult {
+  whois: WHOISData | null;
+  shodan_ports: number[] | null;
+  shodan_org: string | null;
+  shodan_country: string | null;
+  certificates: string[] | null;
+  subdomains_from_certs: string[] | null;
+}
+
+interface DNSRecord {
+  record_type: string;
+  name: string;
+  value: string;
+  ttl: number;
+}
+
+interface SubdomainResult {
+  subdomain: string;
+  ip_address: string | null;
+  is_different_ip: boolean;
+}
+
+interface OSINTPanelProps {
+  osint: OSINTResult | null;
+  dnsRecords: DNSRecord[];
+  subdomains: SubdomainResult[];
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatDate(value: string | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? value : d.toLocaleDateString(undefined, { dateStyle: "medium" });
+}
+
+function nullish(value: string | null | undefined): string {
+  return value ?? "—";
+}
+
+function groupByRecordType(records: DNSRecord[]): Map<string, DNSRecord[]> {
+  const map = new Map<string, DNSRecord[]>();
+  for (const record of records) {
+    const group = map.get(record.record_type) ?? [];
+    group.push(record);
+    map.set(record.record_type, group);
+  }
+  return map;
+}
+
+function hasSpf(records: DNSRecord[]): boolean {
+  return records.some(
+    (r) => r.record_type === "TXT" && r.value.toLowerCase().includes("spf")
+  );
+}
+
+function hasDkim(records: DNSRecord[]): boolean {
+  return records.some(
+    (r) => r.record_type === "TXT" && r.value.toLowerCase().includes("dkim")
+  );
+}
+
+function isSecurityTxt(record: DNSRecord): boolean {
+  const v = record.value.toLowerCase();
+  return record.record_type === "TXT" && (v.includes("spf") || v.includes("dkim"));
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function WhoisField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
+      <span className="text-sm text-foreground">{children}</span>
+    </div>
+  );
+}
+
+function WhoisSection({ whois }: { whois: WHOISData | null }) {
+  if (!whois) {
+    return (
+      <p className="text-sm text-muted-foreground">WHOIS data unavailable.</p>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-3">
+      <WhoisField label="Registrar">{nullish(whois.registrar)}</WhoisField>
+      <WhoisField label="Registrant Org">{nullish(whois.registrant_org)}</WhoisField>
+      <WhoisField label="Country">{nullish(whois.country)}</WhoisField>
+      <WhoisField label="Created">{formatDate(whois.created)}</WhoisField>
+      <WhoisField label="Expires">
+        <span className="flex items-center gap-2">
+          {formatDate(whois.expires)}
+          {whois.is_expired && (
+            <Badge className="bg-red-100 text-red-700 border-red-200 text-xs font-semibold">
+              DOMAIN EXPIRED
+            </Badge>
+          )}
+        </span>
+      </WhoisField>
+      <WhoisField label="Name Servers">
+        {whois.name_servers && whois.name_servers.length > 0 ? (
+          <ul className="flex flex-col gap-0.5">
+            {whois.name_servers.map((ns) => (
+              <li key={ns} className="font-mono text-xs">
+                {ns}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          "—"
+        )}
+      </WhoisField>
+    </div>
+  );
+}
+
+function DNSSection({ records }: { records: DNSRecord[] }) {
+  if (records.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">No DNS records found.</p>
+    );
+  }
+
+  const grouped = groupByRecordType(records);
+  const spfPresent = hasSpf(records);
+  const dkimPresent = hasDkim(records);
+
+  // Flatten while preserving record_type grouping order
+  const sorted: DNSRecord[] = [];
+  grouped.forEach((group) => sorted.push(...group));
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* SPF / DKIM security indicator */}
+      <div className="flex flex-wrap gap-3">
+        <span className="flex items-center gap-1.5 text-sm">
+          {spfPresent ? (
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+          ) : (
+            <AlertTriangle className="h-4 w-4 text-red-500" />
+          )}
+          <span className={spfPresent ? "text-green-700" : "text-red-600"}>
+            SPF {spfPresent ? "present" : "absent — email spoofing risk"}
+          </span>
+        </span>
+        <span className="flex items-center gap-1.5 text-sm">
+          {dkimPresent ? (
+            <CheckCircle2 className="h-4 w-4 text-green-500" />
+          ) : (
+            <AlertTriangle className="h-4 w-4 text-yellow-500" />
+          )}
+          <span className={dkimPresent ? "text-green-700" : "text-yellow-700"}>
+            DKIM {dkimPresent ? "present" : "not detected"}
+          </span>
+        </span>
+      </div>
+
+      <div className="rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-24">Type</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead>Value</TableHead>
+              <TableHead className="w-24 text-right">TTL</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sorted.map((record, idx) => (
+              <TableRow
+                key={idx}
+                className={isSecurityTxt(record) ? "bg-green-50" : undefined}
+              >
+                <TableCell>
+                  <Badge variant="outline" className="font-mono text-xs">
+                    {record.record_type}
+                  </Badge>
+                </TableCell>
+                <TableCell className="font-mono text-xs">{record.name}</TableCell>
+                <TableCell className="max-w-xs break-all font-mono text-xs">
+                  {record.value}
+                </TableCell>
+                <TableCell className="text-right text-xs text-muted-foreground">
+                  {record.ttl}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+function SubdomainsSection({
+  subdomains,
+  certsSubdomains,
+}: {
+  subdomains: SubdomainResult[];
+  certsSubdomains: string[];
+}) {
+  const bothEmpty = subdomains.length === 0 && certsSubdomains.length === 0;
+
+  if (bothEmpty) {
+    return (
+      <p className="text-sm text-muted-foreground">No subdomains discovered.</p>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+      {/* Left — DNS brute-force */}
+      <div className="flex flex-col gap-2">
+        <h4 className="text-sm font-semibold text-foreground">
+          From DNS brute-force
+        </h4>
+        {subdomains.length === 0 ? (
+          <p className="text-sm text-muted-foreground">None found.</p>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {subdomains.map((s, idx) => (
+              <li key={idx} className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-mono text-xs text-foreground">
+                  {s.subdomain}
+                </span>
+                {s.ip_address && (
+                  <span className="text-xs text-muted-foreground">
+                    {s.ip_address}
+                  </span>
+                )}
+                {s.is_different_ip && (
+                  <Badge className="bg-yellow-100 text-yellow-800 border-yellow-200 text-xs">
+                    Different IP
+                  </Badge>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+
+      {/* Right — Certificate logs */}
+      <div className="flex flex-col gap-2">
+        <h4 className="text-sm font-semibold text-foreground">
+          From certificate logs
+        </h4>
+        {certsSubdomains.length === 0 ? (
+          <p className="text-sm text-muted-foreground">None found.</p>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {certsSubdomains.map((sub, idx) => (
+              <li key={idx} className="font-mono text-xs text-foreground">
+                {sub}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ShodanSection({ osint }: { osint: OSINTResult }) {
+  const hasShodan =
+    osint.shodan_org || osint.shodan_country || (osint.shodan_ports && osint.shodan_ports.length > 0);
+
+  if (!hasShodan) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Shodan Intelligence</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+          <WhoisField label="Organisation">{nullish(osint.shodan_org)}</WhoisField>
+          <WhoisField label="Country">{nullish(osint.shodan_country)}</WhoisField>
+          {osint.shodan_ports && osint.shodan_ports.length > 0 && (
+            <WhoisField label="Open ports seen">
+              <span className="flex flex-wrap gap-1">
+                {osint.shodan_ports.map((port) => (
+                  <Badge
+                    key={port}
+                    variant="outline"
+                    className="font-mono text-xs"
+                  >
+                    {port}
+                  </Badge>
+                ))}
+              </span>
+            </WhoisField>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Data from Shodan&apos;s last scan — may not reflect current state.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+export default function OSINTPanel({ osint, dnsRecords, subdomains }: OSINTPanelProps) {
+  if (!osint && dnsRecords.length === 0) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-dashed p-12">
+        <p className="text-sm text-muted-foreground">
+          OSINT data unavailable — check your API keys in <code className="font-mono">.env</code>
+        </p>
+      </div>
+    );
+  }
+
+  const certsSubdomains = osint?.subdomains_from_certs ?? [];
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* Section 1 — WHOIS */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">WHOIS</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <WhoisSection whois={osint?.whois ?? null} />
+        </CardContent>
+      </Card>
+
+      {/* Section 2 — DNS Records */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">DNS Records</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DNSSection records={dnsRecords} />
+        </CardContent>
+      </Card>
+
+      {/* Section 3 — Subdomains */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Subdomains Discovered</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SubdomainsSection
+            subdomains={subdomains}
+            certsSubdomains={certsSubdomains}
+          />
+        </CardContent>
+      </Card>
+
+      {/* Section 4 — Shodan (conditional) */}
+      {osint && <ShodanSection osint={osint} />}
+    </div>
+  );
+}
