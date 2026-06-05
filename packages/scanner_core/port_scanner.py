@@ -52,7 +52,6 @@ EXAMPLE USAGE:
 import logging
 import shutil
 from typing import Any
-from unittest.mock import Mock
 
 import nmap
 from nmap import PortScannerError
@@ -73,8 +72,6 @@ NMAP_MAX_RETRIES = 2
 def _is_nmap_available() -> bool:
     """Return True if the nmap binary is available on the host."""
     available = shutil.which("nmap") is not None
-    if not available and isinstance(nmap.PortScanner, Mock):
-        return True
     if not available:
         logger.error("port_scanner: nmap binary not found in PATH")
     return available

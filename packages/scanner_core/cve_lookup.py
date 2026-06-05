@@ -63,6 +63,7 @@ import logging
 import os
 import time
 import urllib.parse
+from functools import lru_cache
 from typing import Any, Optional
 
 import requests
@@ -81,7 +82,9 @@ NVD_API_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_API_KEY = os.getenv("NVD_API_KEY")
 NVD_RATE_LIMIT_DELAY = 0.6
 REQUEST_TIMEOUT_SECONDS = 10
-_CVE_CACHE: dict[tuple[str, str], list[CVEResult]] = {}
+# Maximum number of unique (service, version) pairs to cache per worker process.
+# Bounded to prevent indefinite memory growth in long-running Celery workers.
+_CVE_CACHE_MAX_SIZE = 512
 
 
 def get_severity_label(cvss_score: float) -> str:
@@ -245,21 +248,21 @@ def lookup_cves(service: str, version: str) -> list[CVEResult]:
         return []
 
     cache_key = (normalized_service.lower(), normalized_version.lower())
-    if cache_key in _CVE_CACHE:
-        logger.debug(
-            "cve_lookup: returning cached CVEs for %s %s",
-            normalized_service,
-            normalized_version,
-        )
-        return _CVE_CACHE[cache_key]
+    return _lookup_cves_cached(*cache_key)
 
+
+@lru_cache(maxsize=_CVE_CACHE_MAX_SIZE)
+def _lookup_cves_cached(normalized_service: str, normalized_version: str) -> list[CVEResult]:
+    """Bounded LRU-cached NVD lookup for (service, version) pairs."""
+    logger.debug(
+        "cve_lookup: cache miss for %s %s — querying NVD",
+        normalized_service,
+        normalized_version,
+    )
     keyword_search = _build_keyword_search(normalized_service, normalized_version)
     if not keyword_search:
         return []
-
-    results = _query_nvd(keyword_search)
-    _CVE_CACHE[cache_key] = results
-    return results
+    return _query_nvd(keyword_search)
 
 
 if __name__ == "__main__":

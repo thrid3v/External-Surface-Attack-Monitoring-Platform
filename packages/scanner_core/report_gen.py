@@ -112,12 +112,13 @@ def generate_report(
     scan_id: str,
     target: str,
     started_at: str,
-    ports: list[PortResult] = [],
-    osint: OSINTResult = None,
-    dns_records: list[DNSRecord] = [],
-    subdomains: list[SubdomainResult] = [],
-    http_findings: list[HttpFinding] = [],
-    errors: dict[str, str] = {},
+    ports: Optional[list[PortResult]] = None,
+    osint: Optional[OSINTResult] = None,
+    dns_records: Optional[list[DNSRecord]] = None,
+    subdomains: Optional[list[SubdomainResult]] = None,
+    http_findings: Optional[list[HttpFinding]] = None,
+    modules_run: Optional[list[str]] = None,
+    errors: Optional[dict[str, str]] = None,
 ) -> ScanReport:
     """Assemble all scan module outputs into a final ScanReport."""
     try:
@@ -126,6 +127,30 @@ def generate_report(
         subdomains = subdomains or []
         http_findings = http_findings or []
         errors = errors or {}
+        # Use the caller-supplied list when available; fall back to inference
+        # only for backwards compatibility with direct calls that omit it.
+        if modules_run is not None:
+            actual_modules_run = list(modules_run)
+        else:
+            # Legacy inference from outputs (less accurate but kept for
+            # callers that don't pass the explicit list).
+            actual_modules_run = []
+            if ports:
+                actual_modules_run.append("port_scanner")
+            if any(getattr(p, "cves", []) for p in ports):
+                actual_modules_run.append("cve_lookup")
+            if dns_records or subdomains:
+                actual_modules_run.append("dns_enum")
+            if osint is not None and any([
+                osint.whois,
+                osint.shodan_ports,
+                osint.shodan_vulns,
+                osint.certificates,
+                osint.subdomains_from_certs,
+            ]):
+                actual_modules_run.append("osint_fetcher")
+            if http_findings:
+                actual_modules_run.append("service_probe")
 
         cves = _collect_all_cves(ports)
         score = calculate_risk_score(cves, len(ports), http_findings)
@@ -138,24 +163,6 @@ def generate_report(
         scan_duration_seconds = None
         if started_dt:
             scan_duration_seconds = round((now - started_dt).total_seconds(), 2)
-
-        modules_run: list[str] = []
-        if ports:
-            modules_run.append("port_scanner")
-        if cves:
-            modules_run.append("cve_lookup")
-        if osint is not None and any([
-            osint.whois,
-            osint.shodan_ports,
-            osint.shodan_vulns,
-            osint.certificates,
-            osint.subdomains_from_certs,
-        ]):
-            modules_run.append("osint_fetcher")
-        if dns_records or subdomains:
-            modules_run.append("dns_enum")
-        if http_findings:
-            modules_run.append("service_probe")
 
         report = ScanReport(
             scan_id=scan_id,
@@ -174,7 +181,7 @@ def generate_report(
             started_at=started_at,
             completed_at=now.isoformat(),
             scan_duration_seconds=scan_duration_seconds,
-            modules_run=modules_run,
+            modules_run=actual_modules_run,
             errors=errors,
         )
         return report

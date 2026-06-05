@@ -58,3 +58,112 @@
  *   "  192.168.1.1  "           → "192.168.1.1"
  *   "http://sub.domain.co.uk"   → "sub.domain.co.uk"
  */
+
+"use client"
+
+import * as React from "react"
+
+import { Button } from "./ui/button"
+import { Input } from "./ui/input"
+import { startScan } from "@/lib/api"
+
+type ScanInputProps = {
+  onScan: (scanId: string) => void
+}
+
+function normalizeTarget(rawTarget: string) {
+  let target = rawTarget.trim()
+  if (!target) {
+    return ""
+  }
+
+  const lowerTarget = target.toLowerCase()
+  if (lowerTarget.startsWith("http://")) {
+    target = target.slice(7)
+  } else if (lowerTarget.startsWith("https://")) {
+    target = target.slice(8)
+  }
+
+  const slashIndex = target.indexOf("/")
+  if (slashIndex !== -1) {
+    target = target.slice(0, slashIndex)
+  }
+
+  return target.trim()
+}
+
+export default function ScanInput({ onScan }: ScanInputProps) {
+  const [value, setValue] = React.useState("")
+  const [loading, setLoading] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const handleSubmit = React.useCallback(async () => {
+    setLoading(true)
+    setError(null)
+
+    const trimmed = value.trim()
+    if (!trimmed) {
+      setError("Enter a URL, domain, or IP address.")
+      setLoading(false)
+      return
+    }
+
+    if (/\s/.test(trimmed)) {
+      setError("Targets may not contain spaces.")
+      setLoading(false)
+      return
+    }
+
+    const target = normalizeTarget(trimmed)
+    if (!target) {
+      setError("Enter a valid URL, domain, or IP address.")
+      setLoading(false)
+      return
+    }
+
+    try {
+      const result = await startScan(target)
+      onScan(result.scan_id)
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message)
+      } else {
+        setError("An unexpected error occurred.")
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [onScan, value])
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault()
+      void handleSubmit()
+    }
+  }
+
+  return (
+    <div className="flex w-full flex-col gap-2">
+      <div className="flex w-full items-center gap-2">
+        <Input
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={loading}
+          aria-invalid={!!error}
+          placeholder="Enter a URL, domain, or IP"
+          className="min-w-0"
+        />
+        <Button onClick={handleSubmit} disabled={loading} type="button">
+          {loading ? (
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          ) : (
+            "Scan"
+          )}
+        </Button>
+      </div>
+      <p className="text-sm text-muted-foreground">e.g. example.com · 192.168.1.1</p>
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+    </div>
+  )
+}
