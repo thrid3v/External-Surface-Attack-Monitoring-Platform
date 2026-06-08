@@ -5,7 +5,7 @@
  * Handles three states: scanning (in progress), complete, failed.
  *
  * URL PARAMETER:
- *   params.id — the scan_id UUID returned by POST /api/scans.
+ *   id — the scan_id UUID returned by POST /api/scans.
  *   Next.js passes this automatically from the [id] folder name.
  *
  * THIS MUST BE A CLIENT COMPONENT ("use client") because it polls
@@ -65,7 +65,7 @@ import Link from "next/link"
 import { Clock, AlertCircle, ArrowLeft } from "lucide-react"
 
 import { getScanStatus, getScanReport } from "@/lib/api"
-import { Badge } from "@/components/ui/badge"
+import type { ScanReport, CVEResult } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
@@ -74,22 +74,22 @@ import RiskScore from "@/components/risk_score"
 import { CVEList } from "@/components/CVE_list"
 import PortTable from "@/components/port_table"
 import HttpPanel from "@/components/HTTP_panel"
+import OSINTPanel from "@/components/OSINT_panel"
 import ReportExport from "@/components/report_export"
 
 const POLLING_INTERVAL = 3000 // 3 seconds
 
 interface PageProps {
-  params: {
-    id: string
-  }
+  params: Promise<{ id: string }>
 }
 
 export default function ResultsPage({ params }: PageProps) {
+  const { id } = React.use(params)
   const router = useRouter()
   const [status, setStatus] = React.useState<"pending" | "running" | "complete" | "failed">(
     "pending"
   )
-  const [report, setReport] = React.useState<any>(null)
+  const [report, setReport] = React.useState<ScanReport | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [currentModule, setCurrentModule] = React.useState<string | null>(null)
 
@@ -99,12 +99,12 @@ export default function ResultsPage({ params }: PageProps) {
   React.useEffect(() => {
     const poll = async () => {
       try {
-        const statusResponse = await getScanStatus(params.id)
+        const statusResponse = await getScanStatus(id)
 
         if (statusResponse.status === "complete") {
           // Scan is done, fetch the full report
           try {
-            const reportData = await getScanReport(params.id)
+            const reportData = await getScanReport(id)
             setReport(reportData)
             setStatus("complete")
 
@@ -124,7 +124,7 @@ export default function ResultsPage({ params }: PageProps) {
           }
         } else if (statusResponse.status === "failed") {
           setError(
-            (statusResponse as any).error || "Scan failed without a specific error message"
+            statusResponse.error || "Scan failed without a specific error message"
           )
           setStatus("failed")
 
@@ -139,7 +139,6 @@ export default function ResultsPage({ params }: PageProps) {
         }
       } catch (err) {
         // Connection error, but keep polling
-        // eslint-disable-next-line no-console
         console.error("Polling error:", err)
       }
     }
@@ -157,7 +156,7 @@ export default function ResultsPage({ params }: PageProps) {
         intervalRef.current = null
       }
     }
-  }, [params.id])
+  }, [id])
 
   // Render pending/running state
   if (status === "pending" || status === "running") {
@@ -170,7 +169,7 @@ export default function ResultsPage({ params }: PageProps) {
               Back
             </Button>
           </Link>
-          <ScanProgress currentModule={currentModule} target={params.id} />
+          <ScanProgress currentModule={currentModule} target={id} />
         </div>
       </div>
     )
@@ -221,19 +220,20 @@ export default function ResultsPage({ params }: PageProps) {
   const ports = report.ports ?? []
   const osintData = report.osint ?? {}
   const httpFindings = report.http_findings ?? []
-  const dnsRecords = report.dns_records ?? {}
+  const dnsRecords = report.dns_records ?? []
+  const subdomains = report.subdomains ?? []
 
   // Calculate severity summary
   const severitySummary = {
-    critical: cves.filter((c: any) => c.severity === "CRITICAL").length,
-    high: cves.filter((c: any) => c.severity === "HIGH").length,
-    medium: cves.filter((c: any) => c.severity === "MEDIUM").length,
-    low: cves.filter((c: any) => c.severity === "LOW").length,
+    critical: cves.filter((c) => c.severity === "CRITICAL").length,
+    high: cves.filter((c) => c.severity === "HIGH").length,
+    medium: cves.filter((c) => c.severity === "MEDIUM").length,
+    low: cves.filter((c) => c.severity === "LOW").length,
   }
 
   // Get top findings for CVEList
-  const topFindings = cves
-    .sort((a: any, b: any) => {
+  const topFindings = [...cves]
+    .sort((a: CVEResult, b: CVEResult) => {
       const severityRank: Record<string, number> = {
         CRITICAL: 0,
         HIGH: 1,
@@ -333,43 +333,8 @@ export default function ResultsPage({ params }: PageProps) {
             <PortTable ports={ports} />
           </TabsContent>
 
-          <TabsContent value="osint" className="space-y-4">
-            {/* Placeholder for OSINTPanel - inline implementation */}
-            <Card className="rounded-3xl border border-border">
-              <CardHeader>
-                <CardTitle>OSINT & DNS Information</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {osintData.whois ? (
-                  <div className="space-y-2">
-                    <h3 className="font-semibold">WHOIS</h3>
-                    <pre className="overflow-auto rounded-2xl border border-border bg-muted p-4 text-xs text-foreground">
-                      {typeof osintData.whois === "string"
-                        ? osintData.whois
-                        : JSON.stringify(osintData.whois, null, 2)}
-                    </pre>
-                  </div>
-                ) : null}
-
-                {dnsRecords && Object.keys(dnsRecords).length > 0 ? (
-                  <div className="space-y-2">
-                    <h3 className="font-semibold">DNS Records</h3>
-                    <div className="space-y-2">
-                      {Object.entries(dnsRecords).map(([key, value]) => (
-                        <div key={key} className="rounded-2xl border border-border bg-muted p-3">
-                          <p className="text-xs text-muted-foreground">{key}</p>
-                          <p className="text-sm font-mono">
-                            {Array.isArray(value) ? value.join(", ") : String(value)}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No DNS data available</p>
-                )}
-              </CardContent>
-            </Card>
+          <TabsContent value="osint">
+            <OSINTPanel osint={osintData} dnsRecords={dnsRecords} subdomains={subdomains} />
           </TabsContent>
 
           <TabsContent value="http">

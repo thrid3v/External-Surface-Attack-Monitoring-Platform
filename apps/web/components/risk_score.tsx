@@ -1,57 +1,75 @@
-/**
- * components/RiskScore.tsx
- * ------------------------
- * Displays the overall risk score prominently at the top of the results page.
- * The first thing a user sees after a scan completes.
- *
- * PROPS:
- *   score: number          0-100 integer
- *   label: string          "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "MINIMAL"
- *   severitySummary: Record<string, number>
- *     e.g. { critical: 2, high: 5, medium: 3, low: 1 }
- *   target: string         shown as a subtitle
- *
- * LAYOUT:
- *   A wide Card containing two columns:
- *
- *   LEFT COLUMN:
- *     - Large number: the score (e.g. "72")
- *       Font size should be very large — use text-7xl or text-8xl.
- *       Color the number by severity (see color mapping below).
- *     - The risk label below the number in a Badge.
- *     - The target domain in small muted text below that.
- *
- *   RIGHT COLUMN:
- *     Four small stat boxes, one per severity:
- *       CRITICAL: count in red
- *       HIGH:     count in orange
- *       MEDIUM:   count in yellow
- *       LOW:      count in blue/muted
- *     Each box shows the count large and the label small below it.
- *
- * SEVERITY COLOR MAPPING:
- *   CRITICAL → text-red-500   / bg-red-50
- *   HIGH     → text-orange-500 / bg-orange-50
- *   MEDIUM   → text-yellow-500 / bg-yellow-50
- *   LOW      → text-blue-500  / bg-blue-50
- *   MINIMAL  → text-gray-500  / bg-gray-50
- *
- *   Apply the matching color to the big score number and to the
- *   border-left of the card for a strong visual signal.
- *
- * ANIMATION (optional but impactful):
- *   Animate the score number counting up from 0 to the final value
- *   when the component mounts. Use a simple useEffect with an interval
- *   that increments a display value by ~2 per frame until it reaches
- *   the real score. Duration: ~800ms.
- *   This makes the score feel dynamic rather than just appearing.
- *   If you implement this, the component needs "use client".
- *
- * SHADCN COMPONENTS USED:
- *   Card, CardContent, Badge
- *
- * NOTE:
- *   This is a display-only component — no API calls, no state beyond
- *   the optional count-up animation. Keep it simple and visually striking.
- *   A security person should be able to read the risk at a glance.
- */
+"use client"
+
+import { useEffect, useState } from "react"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent } from "@/components/ui/card"
+
+const SEVERITY_COLORS: Record<string, { text: string; bg: string; border: string }> = {
+  CRITICAL: { text: "text-red-500",    bg: "bg-red-50 dark:bg-red-950",      border: "border-l-red-500" },
+  HIGH:     { text: "text-orange-500", bg: "bg-orange-50 dark:bg-orange-950", border: "border-l-orange-500" },
+  MEDIUM:   { text: "text-yellow-500", bg: "bg-yellow-50 dark:bg-yellow-950", border: "border-l-yellow-500" },
+  LOW:      { text: "text-blue-500",   bg: "bg-blue-50 dark:bg-blue-950",     border: "border-l-blue-500" },
+  MINIMAL:  { text: "text-gray-500",   bg: "bg-gray-50 dark:bg-gray-900",     border: "border-l-gray-400" },
+}
+
+const STAT_ROWS = [
+  { key: "critical", label: "CRITICAL", colorKey: "CRITICAL" },
+  { key: "high",     label: "HIGH",     colorKey: "HIGH" },
+  { key: "medium",   label: "MEDIUM",   colorKey: "MEDIUM" },
+  { key: "low",      label: "LOW",      colorKey: "LOW" },
+]
+
+interface RiskScoreProps {
+  score: number
+  label: string
+  severitySummary: Record<string, number>
+  target: string
+}
+
+export default function RiskScore({ score, label, severitySummary, target }: RiskScoreProps) {
+  const [displayScore, setDisplayScore] = useState(0)
+
+  useEffect(() => {
+    if (score === 0) return
+    let current = 0
+    const step = Math.max(1, Math.ceil(score / 40))
+    const timer = setInterval(() => {
+      current = Math.min(current + step, score)
+      setDisplayScore(current)
+      if (current >= score) clearInterval(timer)
+    }, 20)
+    return () => clearInterval(timer)
+  }, [score])
+
+  const colors = SEVERITY_COLORS[label] ?? SEVERITY_COLORS.MINIMAL
+
+  return (
+    <Card className={`rounded-3xl border-l-4 ${colors.border}`}>
+      <CardContent className="pt-6">
+        <div className="grid gap-6 sm:grid-cols-[auto_1fr]">
+          <div className="space-y-2">
+            <p className={`text-8xl font-bold tabular-nums leading-none ${colors.text}`}>
+              {displayScore}
+            </p>
+            <Badge className={`${colors.text} ${colors.bg} border-0 text-xs font-semibold`}>
+              {label}
+            </Badge>
+            <p className="font-mono text-sm text-muted-foreground">{target}</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {STAT_ROWS.map(({ key, label: sLabel, colorKey }) => {
+              const c = SEVERITY_COLORS[colorKey]
+              return (
+                <div key={key} className={`rounded-2xl p-4 ${c.bg} space-y-1 text-center`}>
+                  <p className={`text-2xl font-bold ${c.text}`}>{severitySummary[key] ?? 0}</p>
+                  <p className="text-xs text-muted-foreground">{sLabel}</p>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}

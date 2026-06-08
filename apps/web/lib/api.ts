@@ -48,6 +48,7 @@ export interface ScanStatus {
   current_module?: string | null
   modules_complete?: string[]
   started_at?: string
+  error?: string
 }
 
 export async function getScanStatus(scan_id: string) {
@@ -55,6 +56,6 @@ export async function getScanStatus(scan_id: string) {
 }
 
 export async function getScanReport(scan_id: string) {
-  return apiFetch<any>(`/api/scans/${scan_id}`)
+  return apiFetch<import("./types").ScanReport>(`/api/scans/${scan_id}`)
 }
 

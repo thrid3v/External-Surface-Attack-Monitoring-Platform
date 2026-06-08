@@ -51,7 +51,7 @@ import Link from "next/link"
 import ScanInputClient from "@/components/scan_input_client"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardContent } from "@/components/ui/card"
-import { getRecentScans, type RecentScan } from "@/lib/api"
+import { getRecentScans } from "@/lib/api"
 
 
 function badgeVariant(label: string | null) {

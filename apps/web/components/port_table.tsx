@@ -11,7 +11,6 @@ import {
   TableHead,
   TableCell,
 } from "./ui/table"
-import { cn } from "@/lib/utils"
 
 export type Severity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "NONE"
 
