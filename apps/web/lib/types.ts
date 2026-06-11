@@ -66,11 +66,11 @@ export interface OSINTResult {
 
 export interface HttpFinding {
   url: string
-  status_code?: number | null
+  status_code?: number | null | undefined
   server_header?: string | null
   powered_by?: string | null
   cms_detected?: string | null
-  missing_headers?: string[]
+  missing_headers: string[]
   cert?: CertInfo | null
 }
 

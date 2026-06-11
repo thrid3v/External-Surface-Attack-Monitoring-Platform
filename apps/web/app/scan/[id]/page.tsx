@@ -330,7 +330,7 @@ export default function ResultsPage({ params }: PageProps) {
           </TabsContent>
 
           <TabsContent value="ports">
-            <PortTable ports={ports} />
+            <PortTable ports={ports} /> 
           </TabsContent>
 
           <TabsContent value="osint">

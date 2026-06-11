@@ -39,8 +39,13 @@ export async function startScan(target: string, portRange?: string) {
 }
 
 export async function getRecentScans() {
-  return apiFetch<RecentScan[]>("/api/scans")
+  try {
+    return await apiFetch<RecentScan[]>("/api/scans")
+  } catch {
+    return []
+  }
 }
+
 
 export interface ScanStatus {
   scan_id: string
@@ -50,6 +55,7 @@ export interface ScanStatus {
   started_at?: string
   error?: string
 }
+
 
 export async function getScanStatus(scan_id: string) {
   return apiFetch<ScanStatus>(`/api/scans/${scan_id}/status`)

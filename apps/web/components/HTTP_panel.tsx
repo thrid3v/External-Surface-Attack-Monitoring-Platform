@@ -6,6 +6,7 @@ import { Check, ExternalLink, ChevronDown, ChevronUp, X } from "lucide-react"
 import { Badge } from "./ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card"
 import { cn } from "@/lib/utils"
+import type { CertInfo, HttpFinding } from "@/lib/types"
 
 const ALL_HEADERS = [
   "Content-Security-Policy",
@@ -15,26 +16,6 @@ const ALL_HEADERS = [
   "Referrer-Policy",
   "Permissions-Policy",
 ] as const
-
-export interface CertInfo {
-  issuer?: string | null
-  valid_from?: string | null
-  valid_to?: string | null
-  days_until_expiry?: number | null
-  tls_version?: string | null
-  is_expired?: boolean
-  sans?: string[] | null
-}
-
-export interface HttpFinding {
-  url: string
-  status_code: number
-  server_header?: string | null
-  powered_by?: string | null
-  cms_detected?: string | null
-  missing_headers: string[]
-  cert?: CertInfo | null
-}
 
 function statusBadgeProps(statusCode: number) {
   if (statusCode === 200) {
@@ -156,7 +137,7 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                 </a>
                 <ExternalLink className="h-4 w-4 text-muted-foreground" />
               </div>
-              <Badge className="rounded-full px-3 py-1 text-sm font-medium" {...statusBadgeProps(finding.status_code)}>
+              <Badge className="rounded-full px-3 py-1 text-sm font-medium" {...statusBadgeProps(finding.status_code ?? 0)}>
                 {finding.status_code}
               </Badge>
             </CardHeader>
@@ -304,9 +285,9 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                         </button>
                         {sanOpen ? (
                           <div className="mt-3 space-y-2 rounded-2xl border border-border bg-background p-3 text-sm text-muted-foreground">
-                            {cert.sans && cert.sans.length ? (
+                            {cert.subject_alt_names && cert.subject_alt_names.length ? (
                               <ul className="list-disc space-y-1 pl-5">
-                                {cert.sans.map((san) => (
+                                {cert.subject_alt_names.map((san) => (
                                   <li key={san}>{san}</li>
                                 ))}
                               </ul>
