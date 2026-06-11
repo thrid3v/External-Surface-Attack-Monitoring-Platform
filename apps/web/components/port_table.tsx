@@ -27,7 +27,7 @@ export interface CVEResult {
 export interface PortResult {
   port: number
   protocol: string
-  service: string
+  service: string | null 
   product?: string | null
   version?: string | null
   banner?: string | null

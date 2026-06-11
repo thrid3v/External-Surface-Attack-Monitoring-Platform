@@ -48,6 +48,7 @@
 
 import Link from "next/link"
 
+
 import ScanInputClient from "@/components/scan_input_client"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardContent } from "@/components/ui/card"
