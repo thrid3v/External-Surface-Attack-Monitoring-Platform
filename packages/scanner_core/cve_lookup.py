@@ -82,6 +82,10 @@ NVD_API_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_API_KEY = os.getenv("NVD_API_KEY")
 NVD_RATE_LIMIT_DELAY = 0.6
 REQUEST_TIMEOUT_SECONDS = 10
+# Bound the NVD response size and how many CVEs we keep per service so a broad
+# keyword match cannot flood a report with low-signal results.
+NVD_RESULTS_PER_PAGE = 50
+MAX_CVES_PER_SERVICE = 10
 # Maximum number of unique (service, version) pairs to cache per worker process.
 # Bounded to prevent indefinite memory growth in long-running Celery workers.
 _CVE_CACHE_MAX_SIZE = 512
@@ -171,6 +175,9 @@ def _parse_cve_item(item: dict[str, Any]) -> CVEResult | None:
             url = ref.get("url")
             if isinstance(url, str) and url:
                 references.append(url)
+    # NVD frequently lists the same reference URL more than once; dedup while
+    # preserving order.
+    references = list(dict.fromkeys(references))
 
     published_date = item.get("published") or item.get("publishedDate")
     return CVEResult(
@@ -184,9 +191,13 @@ def _parse_cve_item(item: dict[str, Any]) -> CVEResult | None:
     )
 
 
-def _query_nvd(keyword_search: str) -> list[CVEResult]:
-    """Query the NVD API and return parsed CVE results."""
-    params = {"keywordSearch": keyword_search}
+def _query_nvd(keyword_search: str, product_token: str = "") -> list[CVEResult]:
+    """Query the NVD API and return parsed CVE results.
+
+    ``product_token`` (e.g. "apache") is used to drop keyword-search matches
+    whose description doesn't even mention the product, cutting false positives.
+    """
+    params = {"keywordSearch": keyword_search, "resultsPerPage": NVD_RESULTS_PER_PAGE}
     headers = {}
     if NVD_API_KEY:
         headers["apiKey"] = NVD_API_KEY
@@ -230,7 +241,17 @@ def _query_nvd(keyword_search: str) -> list[CVEResult]:
         if cve_result is not None:
             results.append(cve_result)
 
+    # Drop matches that don't mention the product at all, but only when the
+    # filter leaves something behind (NVD descriptions sometimes spell the
+    # product differently than the keyword we searched).
+    if product_token:
+        token = product_token.lower()
+        filtered = [cve for cve in results if token in cve.description.lower()]
+        if filtered:
+            results = filtered
+
     results.sort(key=lambda item: item.cvss_score or 0.0, reverse=True)
+    results = results[:MAX_CVES_PER_SERVICE]
     logger.info("cve_lookup: found %d CVEs for query %s", len(results), keyword_search)
     return results
 
@@ -262,7 +283,8 @@ def _lookup_cves_cached(normalized_service: str, normalized_version: str) -> lis
     keyword_search = _build_keyword_search(normalized_service, normalized_version)
     if not keyword_search:
         return []
-    return _query_nvd(keyword_search)
+    product_token = normalized_service.split()[0] if normalized_service else ""
+    return _query_nvd(keyword_search, product_token=product_token)
 
 
 if __name__ == "__main__":
