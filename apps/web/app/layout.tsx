@@ -54,13 +54,12 @@
 
 
 import type { Metadata } from "next";
-import Link from "next/link";
-import { ExternalLink } from "lucide-react";
 import { Geist, Geist_Mono, Figtree } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
+import { Providers } from "./providers";
 
-const figtree = Figtree({subsets:['latin'],variable:'--font-sans'});
+const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -73,7 +72,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "EASM Scanner",
+  title: "EASM — Attack Surface Console",
   description: "External Attack Surface Management — scan domains and IPs for vulnerabilities",
 };
 
@@ -85,29 +84,10 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={cn("h-full", "antialiased", geistSans.variable, geistMono.variable, "font-sans", figtree.variable)}
+      className={cn("dark h-full antialiased", geistSans.variable, geistMono.variable, "font-sans", figtree.variable)}
     >
-      <body className="min-h-full flex flex-col">
-        <nav className="flex items-center justify-between border-b border-border px-6 py-4">
-          <Link href="/" className="text-sm font-bold tracking-tight">
-            EASM Scanner
-          </Link>
-          <div className="flex items-center gap-4 text-sm text-muted-foreground">
-            <Link href="/docs" className="hover:text-foreground transition-colors">
-              Docs
-            </Link>
-            <a
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="GitHub"
-              className="hover:text-foreground transition-colors"
-            >
-              <ExternalLink className="h-4 w-4" />
-            </a>
-          </div>
-        </nav>
-        {children}
+      <body className="min-h-full">
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

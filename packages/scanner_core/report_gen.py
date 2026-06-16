@@ -27,6 +27,23 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 TOP_FINDINGS_LIMIT = 5
+CERT_EXPIRY_WARNING_DAYS = 14
+
+
+def _has_expiring_or_expired_cert(
+    http_findings: Optional[list[HttpFinding]],
+    osint: Optional[OSINTResult],
+) -> bool:
+    """Return True if any observed certificate is expired or expiring soon."""
+    certs = [finding.cert for finding in (http_findings or []) if finding.cert]
+    if osint and osint.certificates:
+        certs.extend(osint.certificates)
+    for cert in certs:
+        if cert.is_expired:
+            return True
+        if cert.days_until_expiry is not None and cert.days_until_expiry <= CERT_EXPIRY_WARNING_DAYS:
+            return True
+    return False
 
 
 def _collect_all_cves(ports: list[PortResult]) -> list[CVEResult]:
@@ -45,8 +62,11 @@ def calculate_risk_score(
     cves: list[CVEResult],
     open_port_count: int,
     http_findings: list[HttpFinding],
+    osint: Optional[OSINTResult] = None,
+    zone_transfer_vulnerable: bool = False,
 ) -> int:
-    """Calculate a 0-100 risk score based on CVEs, open ports, and HTTP issues."""
+    """Calculate a 0-100 risk score from CVEs, open ports, HTTP hygiene, and
+    additional exposure signals (zone transfer, certs, domain, Shodan vulns)."""
     if not cves:
         max_cvss = 0.0
     else:
@@ -62,7 +82,19 @@ def calculate_risk_score(
     total_missing_headers = sum(len(finding.missing_headers or []) for finding in http_findings or [])
     component_4 = min(total_missing_headers * 2, 15)
 
-    final_score = int(component_1 + component_2 + component_3 + component_4)
+    # Additional exposure signals, capped collectively so they cannot dominate.
+    exposure = 0
+    if zone_transfer_vulnerable:
+        exposure += 15
+    if _has_expiring_or_expired_cert(http_findings, osint):
+        exposure += 8
+    if osint and osint.whois and osint.whois.is_expired:
+        exposure += 10
+    if osint and osint.shodan_vulns:
+        exposure += min(len(osint.shodan_vulns) * 3, 12)
+    component_5 = min(exposure, 25)
+
+    final_score = int(component_1 + component_2 + component_3 + component_4 + component_5)
     return min(final_score, 100)
 
 
@@ -95,6 +127,25 @@ def _get_top_findings(cves: list[CVEResult], limit: int = TOP_FINDINGS_LIMIT) ->
     return sorted_cves[:limit]
 
 
+def _merge_subdomains(
+    subdomains: list[SubdomainResult],
+    osint: Optional[OSINTResult],
+) -> list[SubdomainResult]:
+    """Merge certificate-transparency subdomains (from crt.sh, stored on the
+    OSINT result) into the unified subdomain list, deduping by name and
+    preserving the brute-forced entries which carry resolved IPs."""
+    merged: list[SubdomainResult] = list(subdomains or [])
+    seen = {sub.subdomain.lower() for sub in merged}
+    if osint and osint.subdomains_from_certs:
+        for name in osint.subdomains_from_certs:
+            key = (name or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(SubdomainResult(subdomain=key, source="cert_transparency"))
+    return merged
+
+
 def _parse_started_at(started_at: Optional[str]) -> Optional[datetime]:
     """Parse an ISO 8601 datetime string and return a UTC datetime."""
     if not started_at:
@@ -116,6 +167,8 @@ def generate_report(
     osint: Optional[OSINTResult] = None,
     dns_records: Optional[list[DNSRecord]] = None,
     subdomains: Optional[list[SubdomainResult]] = None,
+    zone_transfer_vulnerable: bool = False,
+    zone_transfer_records: Optional[list[str]] = None,
     http_findings: Optional[list[HttpFinding]] = None,
     modules_run: Optional[list[str]] = None,
     errors: Optional[dict[str, str]] = None,
@@ -125,6 +178,7 @@ def generate_report(
         ports = ports or []
         dns_records = dns_records or []
         subdomains = subdomains or []
+        zone_transfer_records = zone_transfer_records or []
         http_findings = http_findings or []
         errors = errors or {}
         # Use the caller-supplied list when available; fall back to inference
@@ -153,10 +207,17 @@ def generate_report(
                 actual_modules_run.append("service_probe")
 
         cves = _collect_all_cves(ports)
-        score = calculate_risk_score(cves, len(ports), http_findings)
+        score = calculate_risk_score(
+            cves,
+            len(ports),
+            http_findings,
+            osint=osint,
+            zone_transfer_vulnerable=zone_transfer_vulnerable,
+        )
         risk_label = get_risk_label(score)
         severity_summary = _build_severity_summary(cves)
         top_findings = _get_top_findings(cves)
+        subdomains = _merge_subdomains(subdomains, osint)
 
         started_dt = _parse_started_at(started_at)
         now = datetime.now(timezone.utc)
@@ -175,6 +236,8 @@ def generate_report(
             cves=cves,
             dns_records=dns_records,
             subdomains=subdomains,
+            zone_transfer_vulnerable=zone_transfer_vulnerable,
+            zone_transfer_records=zone_transfer_records,
             osint=osint,
             http_findings=http_findings,
             top_findings=top_findings,

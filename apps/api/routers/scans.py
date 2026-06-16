@@ -9,9 +9,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from constants import MODULE_ORDER
+from auth import get_current_user
+from constants import MODULE_ORDER, PORT_PROFILES
 from db.models import Scan
 from deps import get_db
+from services.diff import diff_reports
 from utils import format_datetime
 from workers.scan_worker import run_scan
 
@@ -23,6 +25,7 @@ VALID_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9.-]+$")
 class ScanCreate(BaseModel):
     target: str
     port_range: str = "1-1000"
+    profile: str | None = None
     modules: list[str] | None = None
     i_own_this_target: bool = Field(False)
 
@@ -94,7 +97,11 @@ def _get_modules_complete(current_module: str | None, status: str) -> list[str]:
 
 
 @router.post("", response_model=ScanQueuedResponse)
-def create_scan(payload: ScanCreate, db: Session = Depends(get_db)) -> ScanQueuedResponse:
+def create_scan(
+    payload: ScanCreate,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> ScanQueuedResponse:
     if not payload.i_own_this_target:
         raise HTTPException(
             status_code=403,
@@ -102,17 +109,29 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db)) -> ScanQueue
         )
 
     target = _validate_and_clean_target(payload.target)
+    # A named profile (if valid) resolves to a port range; an explicit
+    # port_range in the request still takes precedence when no profile is given.
+    if payload.profile:
+        if payload.profile not in PORT_PROFILES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown port profile '{payload.profile}'. Valid: {', '.join(PORT_PROFILES)}",
+            )
+        port_range = PORT_PROFILES[payload.profile]
+    else:
+        port_range = payload.port_range
     scan_id = str(uuid.uuid4())
     scan = Scan(
         id=scan_id,
+        owner_email=user,
         target=target,
         status="pending",
-        port_range=payload.port_range,
+        port_range=port_range,
         created_at=datetime.now(timezone.utc),
     )
     db.add(scan)
     db.commit()
-    run_scan.delay(scan_id, target, payload.port_range, payload.modules or list(MODULE_ORDER))
+    run_scan.delay(scan_id, target, port_range, payload.modules or list(MODULE_ORDER))
 
     return ScanQueuedResponse(
         scan_id=scan_id,
@@ -122,8 +141,12 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db)) -> ScanQueue
 
 
 @router.get("/{scan_id}")
-def get_scan(scan_id: str, db: Session = Depends(get_db)) -> Any:
-    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+def get_scan(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> Any:
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.owner_email == user).first()
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
 
@@ -151,8 +174,12 @@ def get_scan(scan_id: str, db: Session = Depends(get_db)) -> Any:
 
 
 @router.get("/{scan_id}/status", response_model=ScanStatusResponse)
-def get_scan_status(scan_id: str, db: Session = Depends(get_db)) -> ScanStatusResponse:
-    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+def get_scan_status(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> ScanStatusResponse:
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.owner_email == user).first()
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
 
@@ -165,10 +192,45 @@ def get_scan_status(scan_id: str, db: Session = Depends(get_db)) -> ScanStatusRe
     )
 
 
+@router.get("/{scan_id}/diff")
+def get_scan_diff(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> Any:
+    """Diff a completed scan against the user's previous completed scan of the
+    same target (new/resolved CVEs, opened/closed ports, risk delta)."""
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.owner_email == user).first()
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if scan.status != "complete" or scan.result is None:
+        raise HTTPException(status_code=409, detail="Scan is not complete")
+
+    previous = (
+        db.query(Scan)
+        .filter(
+            Scan.owner_email == user,
+            Scan.target == scan.target,
+            Scan.status == "complete",
+            Scan.id != scan.id,
+            Scan.started_at < scan.started_at,
+        )
+        .order_by(desc(Scan.started_at), desc(Scan.created_at))
+        .first()
+    )
+
+    diff = diff_reports(previous.result if previous else None, scan.result)
+    return {"scan_id": scan.id, "target": scan.target, **diff}
+
+
 @router.get("", response_model=list[ScanSummary])
-def list_scans(db: Session = Depends(get_db)) -> list[ScanSummary]:
+def list_scans(
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> list[ScanSummary]:
     scans = (
         db.query(Scan)
+        .filter(Scan.owner_email == user)
         .order_by(desc(Scan.started_at), desc(Scan.created_at))
         .limit(20)
         .all()
@@ -188,8 +250,12 @@ def list_scans(db: Session = Depends(get_db)) -> list[ScanSummary]:
 
 
 @router.delete("/{scan_id}")
-def delete_scan(scan_id: str, db: Session = Depends(get_db)) -> dict[str, bool]:
-    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+def delete_scan(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> dict[str, bool]:
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.owner_email == user).first()
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
     db.delete(scan)

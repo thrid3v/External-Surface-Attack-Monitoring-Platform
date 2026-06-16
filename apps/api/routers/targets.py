@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
+from auth import get_current_user
 from db.models import Scan
 from deps import get_db
 from utils import format_datetime
@@ -12,14 +13,17 @@ router = APIRouter()
 
 
 @router.get("")
-def list_targets(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def list_targets(
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> list[dict[str, Any]]:
     """Return one summary row per unique target, ordered by most recently scanned.
 
     Uses a SQL subquery to avoid loading the full scan history into Python
     memory — only the latest scan per target is fetched for the summary
     columns, and a count query gives total scans per target.
     """
-    # Subquery: for each target get the most recent scan's data.
+    # Subquery: for each target get the most recent scan's data (this user only).
     latest_per_target = (
         db.query(
             Scan.target,
@@ -27,6 +31,7 @@ def list_targets(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
             func.max(Scan.created_at).label("last_created_at"),
             func.count(Scan.id).label("total_scans"),
         )
+        .filter(Scan.owner_email == user)
         .group_by(Scan.target)
         .subquery()
     )
@@ -40,7 +45,7 @@ def list_targets(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
     for row in targets_meta:
         latest_scan = (
             db.query(Scan)
-            .filter(Scan.target == row.target)
+            .filter(Scan.target == row.target, Scan.owner_email == user)
             .order_by(desc(Scan.started_at), desc(Scan.created_at))
             .first()
         )
@@ -64,10 +69,14 @@ def list_targets(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
 
 
 @router.get("/{target}/history")
-def get_target_history(target: str, db: Session = Depends(get_db)) -> dict[str, Any]:
+def get_target_history(
+    target: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> dict[str, Any]:
     scans = (
         db.query(Scan)
-        .filter(Scan.target == target)
+        .filter(Scan.target == target, Scan.owner_email == user)
         .order_by(desc(Scan.started_at), desc(Scan.created_at))
         .all()
     )
@@ -91,10 +100,14 @@ def get_target_history(target: str, db: Session = Depends(get_db)) -> dict[str, 
 
 
 @router.get("/{target}/latest")
-def get_latest_complete_scan(target: str, db: Session = Depends(get_db)) -> Any:
+def get_latest_complete_scan(
+    target: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> Any:
     scan = (
         db.query(Scan)
-        .filter(Scan.target == target, Scan.status == "complete")
+        .filter(Scan.target == target, Scan.status == "complete", Scan.owner_email == user)
         .order_by(desc(Scan.started_at), desc(Scan.created_at))
         .first()
     )
