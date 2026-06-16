@@ -34,6 +34,7 @@ from scanner_core.service_probe import audit_all_tls, probe_all_http_ports
 from scanner_core.web_audit import audit_web
 from scanner_core.takeover import check_takeovers
 from scanner_core.email_audit import audit_email
+from scanner_core.nuclei_scan import scan_with_nuclei
 
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
@@ -330,6 +331,18 @@ def run_scan(
                 findings.extend(audit_email(target))
             except Exception as exc:
                 errors["email_audit"] = str(exc)
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "nuclei_scan" in allowed_modules:
+            _set_module_running(db, scan, "nuclei_scan")
+            modules_run.append("nuclei_scan")
+            try:
+                nuclei_urls = [hf.url for hf in http_findings if getattr(hf, "url", None)]
+                findings.extend(scan_with_nuclei(nuclei_urls))
+            except Exception as exc:
+                errors["nuclei_scan"] = str(exc)
 
         if _maybe_fail_on_timeout(db, scan, start_time):
             return {"status": "failed"}

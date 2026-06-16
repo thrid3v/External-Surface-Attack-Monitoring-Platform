@@ -24,6 +24,10 @@ const MODULES = [
   { id: "dns_enum", label: "DNS" },
   { id: "osint_fetcher", label: "OSINT" },
   { id: "service_probe", label: "HTTP/TLS" },
+  { id: "web_audit", label: "Web exposure" },
+  { id: "takeover_check", label: "Takeover" },
+  { id: "email_audit", label: "Email" },
+  { id: "nuclei_scan", label: "Nuclei" },
 ]
 
 function normalizeTarget(rawTarget: string) {
