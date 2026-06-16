@@ -15,3 +15,12 @@ MODULE_ORDER: list[str] = [
     "osint_fetcher",
     "service_probe",
 ]
+
+# Named port profiles so the UI/API can offer presets instead of raw nmap
+# port strings. A request may still pass an explicit `port_range` to override.
+PORT_PROFILES: dict[str, str] = {
+    "common": "21,22,23,25,53,80,110,143,443,445,3306,3389,5432,6379,8000,8080,8443",
+    "top-1000": "1-1000",
+    "full": "1-65535",
+}
+DEFAULT_PORT_PROFILE: str = "top-1000"

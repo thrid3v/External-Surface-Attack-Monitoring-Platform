@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from constants import MODULE_ORDER
+from constants import MODULE_ORDER, PORT_PROFILES
 from db.models import Scan
 from deps import get_db
 from utils import format_datetime
@@ -23,6 +23,7 @@ VALID_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9.-]+$")
 class ScanCreate(BaseModel):
     target: str
     port_range: str = "1-1000"
+    profile: str | None = None
     modules: list[str] | None = None
     i_own_this_target: bool = Field(False)
 
@@ -102,17 +103,28 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db)) -> ScanQueue
         )
 
     target = _validate_and_clean_target(payload.target)
+    # A named profile (if valid) resolves to a port range; an explicit
+    # port_range in the request still takes precedence when no profile is given.
+    if payload.profile:
+        if payload.profile not in PORT_PROFILES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown port profile '{payload.profile}'. Valid: {', '.join(PORT_PROFILES)}",
+            )
+        port_range = PORT_PROFILES[payload.profile]
+    else:
+        port_range = payload.port_range
     scan_id = str(uuid.uuid4())
     scan = Scan(
         id=scan_id,
         target=target,
         status="pending",
-        port_range=payload.port_range,
+        port_range=port_range,
         created_at=datetime.now(timezone.utc),
     )
     db.add(scan)
     db.commit()
-    run_scan.delay(scan_id, target, payload.port_range, payload.modules or list(MODULE_ORDER))
+    run_scan.delay(scan_id, target, port_range, payload.modules or list(MODULE_ORDER))
 
     return ScanQueuedResponse(
         scan_id=scan_id,
