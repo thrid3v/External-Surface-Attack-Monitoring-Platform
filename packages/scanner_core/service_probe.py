@@ -39,12 +39,14 @@ import warnings
 from datetime import datetime, timezone
 from typing import Iterable
 
-from .models import CertInfo, HttpFinding, PortResult
+from .models import CertInfo, Finding, HttpFinding, PortResult
 
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 10
 HTTP_PORTS = [80, 443, 8080, 8443, 8000, 3000]
+TLS_PORTS = [443, 8443]
+WEAK_TLS_VERSIONS = [("TLS 1.0", ssl.TLSVersion.TLSv1), ("TLS 1.1", ssl.TLSVersion.TLSv1_1)]
 SECURITY_HEADERS = [
     "Content-Security-Policy",
     "X-Frame-Options",
@@ -165,6 +167,84 @@ def probe_http(host: str, port: int, use_tls: bool = False) -> HttpFinding:
     except (httpx.RequestError, ssl.SSLError, socket.timeout, OSError) as exc:
         logger.warning("service_probe: HTTP probe failed for %s: %s", url, exc)
     return finding
+
+
+def _supports_tls_version(host: str, port: int, version: ssl.TLSVersion) -> bool:
+    """Return True if the server completes a handshake at exactly *version*."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        context.minimum_version = version
+        context.maximum_version = version
+    except (ValueError, OSError):
+        return False  # protocol disabled in this Python/OpenSSL build
+    try:
+        with socket.create_connection((host, port), timeout=HTTP_TIMEOUT) as sock:
+            with context.wrap_socket(sock, server_hostname=host):
+                return True
+    except Exception:
+        return False
+
+
+def audit_tls(host: str, port: int) -> list[Finding]:
+    """Detect weak TLS protocols and certificate validation problems on a port."""
+    findings: list[Finding] = []
+
+    for name, version in WEAK_TLS_VERSIONS:
+        if _supports_tls_version(host, port, version):
+            findings.append(Finding(
+                title=f"Deprecated {name} enabled",
+                severity="MEDIUM",
+                category="tls",
+                description=f"The server at {host}:{port} negotiates the deprecated {name} protocol.",
+                target=f"{host}:{port}",
+                remediation="Disable TLS 1.0/1.1; require TLS 1.2+.",
+                source="service_probe",
+            ))
+
+    # Strict, verifying handshake to surface cert problems.
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection((host, port), timeout=HTTP_TIMEOUT) as sock:
+            with context.wrap_socket(sock, server_hostname=host):
+                pass
+    except ssl.SSLCertVerificationError as exc:
+        reason = str(exc).lower()
+        if "self-signed" in reason or "self signed" in reason:
+            findings.append(Finding(title="Self-signed TLS certificate", severity="MEDIUM", category="tls",
+                                    description=f"{host}:{port} presents a self-signed certificate.",
+                                    target=f"{host}:{port}", remediation="Use a certificate from a trusted CA.", source="service_probe"))
+        elif "expired" in reason:
+            findings.append(Finding(title="Expired TLS certificate", severity="HIGH", category="tls",
+                                    description=f"{host}:{port} presents an expired certificate.",
+                                    target=f"{host}:{port}", remediation="Renew the TLS certificate.", source="service_probe"))
+        elif "match" in reason:
+            findings.append(Finding(title="TLS certificate hostname mismatch", severity="MEDIUM", category="tls",
+                                    description=f"The certificate at {host}:{port} does not match the hostname.",
+                                    target=f"{host}:{port}", remediation="Issue a certificate covering this hostname (SAN).", source="service_probe"))
+        else:
+            findings.append(Finding(title="TLS certificate validation failed", severity="LOW", category="tls",
+                                    description=str(exc), target=f"{host}:{port}", source="service_probe"))
+    except (ssl.SSLError, socket.timeout, OSError) as exc:
+        logger.debug("service_probe: TLS audit connect failed for %s:%s: %s", host, port, exc)
+
+    return findings
+
+
+def audit_all_tls(host: str, ports: Iterable[PortResult]) -> list[Finding]:
+    """Run TLS audits against all TLS-bearing ports discovered on the host."""
+    findings: list[Finding] = []
+    seen: set[int] = set()
+    for port in ports or []:
+        service = (port.service or "").lower()
+        use_tls = port.port in TLS_PORTS or "ssl" in service or "https" in service
+        if not use_tls or port.port in seen:
+            continue
+        seen.add(port.port)
+        findings.extend(audit_tls(host, port.port))
+    logger.info("service_probe: %d TLS findings for %s", len(findings), host)
+    return findings
 
 
 def probe_all_http_ports(host: str, ports: Iterable[PortResult]) -> list[HttpFinding]:

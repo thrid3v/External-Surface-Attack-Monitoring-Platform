@@ -18,6 +18,7 @@ import HttpPanel from "@/components/HTTP_panel"
 import OSINTPanel from "@/components/OSINT_panel"
 import ReportExport from "@/components/report_export"
 import { DiffPanel } from "@/components/diff_panel"
+import { FindingsPanel } from "@/components/findings_panel"
 import { formatDuration } from "@/lib/format"
 
 const POLLING_INTERVAL = 3000
@@ -138,8 +139,9 @@ export default function ResultsPage({ params }: PageProps) {
   const httpFindings = report.http_findings ?? []
   const dnsRecords = report.dns_records ?? []
   const subdomains = report.subdomains ?? []
+  const findings = report.findings ?? []
 
-  const severitySummary = {
+  const severitySummary = report.severity_summary ?? {
     critical: cves.filter((c) => c.severity === "CRITICAL").length,
     high: cves.filter((c) => c.severity === "HIGH").length,
     medium: cves.filter((c) => c.severity === "MEDIUM").length,
@@ -200,6 +202,9 @@ export default function ResultsPage({ params }: PageProps) {
           <TabsTrigger value="vulnerabilities" className="flex-1">
             Vulnerabilities
           </TabsTrigger>
+          <TabsTrigger value="findings" className="flex-1">
+            Findings{findings.length ? ` (${findings.length})` : ""}
+          </TabsTrigger>
           <TabsTrigger value="ports" className="flex-1">
             Open Ports
           </TabsTrigger>
@@ -213,6 +218,9 @@ export default function ResultsPage({ params }: PageProps) {
 
         <TabsContent value="vulnerabilities">
           <CVEList cves={cves} topFindings={topFindings} />
+        </TabsContent>
+        <TabsContent value="findings">
+          <FindingsPanel findings={findings} />
         </TabsContent>
         <TabsContent value="ports">
           <PortTable ports={ports} />

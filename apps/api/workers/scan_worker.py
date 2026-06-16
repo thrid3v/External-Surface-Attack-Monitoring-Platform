@@ -30,7 +30,11 @@ from scanner_core.dns_enum import run_dns_enum
 from scanner_core.osint_fetcher import fetch_all
 from scanner_core.port_scanner import scan_ports
 from scanner_core.report_gen import generate_report
-from scanner_core.service_probe import probe_all_http_ports
+from scanner_core.service_probe import audit_all_tls, probe_all_http_ports
+from scanner_core.web_audit import audit_web
+from scanner_core.takeover import check_takeovers
+from scanner_core.email_audit import audit_email
+from scanner_core.nuclei_scan import scan_with_nuclei
 
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
@@ -210,6 +214,7 @@ def run_scan(
         zone_transfer_records: list = []
         osint = None
         http_findings: list = []
+        findings: list = []
         errors: dict[str, str] = {}
         # Track which modules actually executed (regardless of success/failure).
         modules_run: list[str] = []
@@ -283,10 +288,61 @@ def run_scan(
             modules_run.append("service_probe")
             try:
                 http_findings = probe_all_http_ports(target, ports)
+                findings.extend(audit_all_tls(target, ports))
                 logger.info("scan_worker: scan=%s service_probe complete", scan_id)
             except Exception as exc:
                 errors["service_probe"] = str(exc)
                 http_findings = []
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "web_audit" in allowed_modules:
+            _set_module_running(db, scan, "web_audit")
+            modules_run.append("web_audit")
+            try:
+                findings.extend(audit_web(target, ports))
+                logger.info("scan_worker: scan=%s web_audit found %d findings", scan_id, len(findings))
+            except Exception as exc:
+                errors["web_audit"] = str(exc)
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "takeover_check" in allowed_modules:
+            _set_module_running(db, scan, "takeover_check")
+            modules_run.append("takeover_check")
+            try:
+                names = {getattr(s, "subdomain", None) for s in subdomains if getattr(s, "subdomain", None)}
+                if osint is not None and getattr(osint, "subdomains_from_certs", None):
+                    names.update(osint.subdomains_from_certs)
+                names.add(target)
+                findings.extend(check_takeovers(sorted(n for n in names if n)))
+            except Exception as exc:
+                errors["takeover_check"] = str(exc)
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "email_audit" in allowed_modules:
+            _set_module_running(db, scan, "email_audit")
+            modules_run.append("email_audit")
+            try:
+                findings.extend(audit_email(target))
+            except Exception as exc:
+                errors["email_audit"] = str(exc)
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "nuclei_scan" in allowed_modules:
+            _set_module_running(db, scan, "nuclei_scan")
+            modules_run.append("nuclei_scan")
+            try:
+                nuclei_urls = [hf.url for hf in http_findings if getattr(hf, "url", None)]
+                findings.extend(scan_with_nuclei(nuclei_urls))
+            except Exception as exc:
+                errors["nuclei_scan"] = str(exc)
 
         if _maybe_fail_on_timeout(db, scan, start_time):
             return {"status": "failed"}
@@ -302,6 +358,7 @@ def run_scan(
             zone_transfer_vulnerable=zone_transfer_vulnerable,
             zone_transfer_records=zone_transfer_records,
             http_findings=http_findings,
+            findings=findings,
             modules_run=modules_run,
             errors=errors,
         )

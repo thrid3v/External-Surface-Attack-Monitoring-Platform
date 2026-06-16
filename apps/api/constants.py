@@ -14,6 +14,10 @@ MODULE_ORDER: list[str] = [
     "dns_enum",
     "osint_fetcher",
     "service_probe",
+    "web_audit",
+    "takeover_check",
+    "email_audit",
+    "nuclei_scan",
 ]
 
 # Named port profiles so the UI/API can offer presets instead of raw nmap
