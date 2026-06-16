@@ -1,94 +1,39 @@
-/**
- * components/ScanInput.tsx
- * ------------------------
- * "use client"
- *
- * The main search box. Accepts a URL, domain, or IP address,
- * validates it client-side, calls the API, and returns the scan_id.
- *
- * PROPS:
- *   onScan: (scanId: string) => void
- *     Callback fired after a scan is successfully queued.
- *     The parent (page.tsx) uses this to navigate to /scan/{scanId}.
- *
- * STATE:
- *   value: string          current input value
- *   loading: boolean       true while waiting for API response
- *   error: string | null   validation or API error to display
- *
- * LAYOUT:
- *   A single row: [text input] [scan button]
- *   Below the row: error message in red if error is set.
- *   Optionally a small hint text below: "e.g. example.com · 192.168.1.1"
- *
- * CLIENT-SIDE VALIDATION (before calling the API):
- *   Run on submit, not on every keystroke.
- *   Strip leading/trailing whitespace.
- *   Strip protocol if present: remove "https://" or "http://"
- *   Strip path if present: take only the hostname part.
- *   Reject if empty after stripping.
- *   Reject if contains spaces.
- *   If it passes: call startScan(cleanedValue) from lib/api.ts.
- *
- *   Do NOT write a complex regex validator — the backend validates properly.
- *   Client-side is just a basic sanity check to avoid obvious empty submits.
- *
- * ON SUBMIT:
- *   1. Set loading = true, error = null
- *   2. Validate — if invalid, set error and return
- *   3. Call startScan(target) from lib/api.ts
- *   4. On success: call onScan(scan_id)
- *   5. On error: set error = the error message from the API
- *   6. Set loading = false in both cases (use try/finally)
- *
- * KEYBOARD:
- *   Pressing Enter in the input should submit (same as clicking the button).
- *   Add onKeyDown handler: if key === "Enter" call handleSubmit().
- *
- * WHILE LOADING:
- *   Disable both the input and the button.
- *   Show a spinner inside the button instead of the text "Scan".
- *   Use the Button component's disabled prop.
- *
- * SHADCN COMPONENTS USED:
- *   Input, Button
- *
- * EXAMPLE final cleaned values for these inputs:
- *   "https://example.com/about" → "example.com"
- *   "  192.168.1.1  "           → "192.168.1.1"
- *   "http://sub.domain.co.uk"   → "sub.domain.co.uk"
- */
-
 "use client"
 
 import * as React from "react"
+import { SlidersHorizontal } from "lucide-react"
 
 import { Button } from "./ui/button"
 import { Input } from "./ui/input"
 import { startScan } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
 type ScanInputProps = {
   onScan: (scanId: string) => void
 }
 
+const PROFILES = [
+  { id: "common", label: "Common ports" },
+  { id: "top-1000", label: "Top 1000" },
+  { id: "full", label: "Full (1-65535)" },
+]
+
+const MODULES = [
+  { id: "port_scanner", label: "Ports" },
+  { id: "cve_lookup", label: "CVEs" },
+  { id: "dns_enum", label: "DNS" },
+  { id: "osint_fetcher", label: "OSINT" },
+  { id: "service_probe", label: "HTTP/TLS" },
+]
+
 function normalizeTarget(rawTarget: string) {
   let target = rawTarget.trim()
-  if (!target) {
-    return ""
-  }
-
-  const lowerTarget = target.toLowerCase()
-  if (lowerTarget.startsWith("http://")) {
-    target = target.slice(7)
-  } else if (lowerTarget.startsWith("https://")) {
-    target = target.slice(8)
-  }
-
-  const slashIndex = target.indexOf("/")
-  if (slashIndex !== -1) {
-    target = target.slice(0, slashIndex)
-  }
-
+  if (!target) return ""
+  const lower = target.toLowerCase()
+  if (lower.startsWith("http://")) target = target.slice(7)
+  else if (lower.startsWith("https://")) target = target.slice(8)
+  const slash = target.indexOf("/")
+  if (slash !== -1) target = target.slice(0, slash)
   return target.trim()
 }
 
@@ -96,24 +41,23 @@ export default function ScanInput({ onScan }: ScanInputProps) {
   const [value, setValue] = React.useState("")
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [profile, setProfile] = React.useState("top-1000")
+  const [showAdvanced, setShowAdvanced] = React.useState(false)
+  const [modules, setModules] = React.useState<string[]>(MODULES.map((m) => m.id))
+
+  const toggleModule = (id: string) =>
+    setModules((prev) => (prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]))
 
   const handleSubmit = React.useCallback(async () => {
     setLoading(true)
     setError(null)
 
     const trimmed = value.trim()
-    if (!trimmed) {
-      setError("Enter a URL, domain, or IP address.")
+    if (!trimmed || /\s/.test(trimmed)) {
+      setError("Enter a valid URL, domain, or IP address.")
       setLoading(false)
       return
     }
-
-    if (/\s/.test(trimmed)) {
-      setError("Targets may not contain spaces.")
-      setLoading(false)
-      return
-    }
-
     const target = normalizeTarget(trimmed)
     if (!target) {
       setError("Enter a valid URL, domain, or IP address.")
@@ -122,37 +66,34 @@ export default function ScanInput({ onScan }: ScanInputProps) {
     }
 
     try {
-      const result = await startScan(target)
+      const result = await startScan(target, {
+        profile,
+        modules: modules.length && modules.length < MODULES.length ? modules : undefined,
+      })
       onScan(result.scan_id)
     } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message)
-      } else {
-        setError("An unexpected error occurred.")
-      }
+      setError(err instanceof Error ? err.message : "An unexpected error occurred.")
     } finally {
       setLoading(false)
     }
-  }, [onScan, value])
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
-      event.preventDefault()
-      void handleSubmit()
-    }
-  }
+  }, [onScan, value, profile, modules])
 
   return (
-    <div className="flex w-full flex-col gap-2">
+    <div className="flex w-full flex-col gap-3">
       <div className="flex w-full items-center gap-2">
         <Input
           value={value}
-          onChange={(event) => setValue(event.target.value)}
-          onKeyDown={handleKeyDown}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault()
+              void handleSubmit()
+            }
+          }}
           disabled={loading}
           aria-invalid={!!error}
-          placeholder="Enter a URL, domain, or IP"
-          className="min-w-0"
+          placeholder="example.com · 192.168.1.1"
+          className="min-w-0 font-mono"
         />
         <Button onClick={handleSubmit} disabled={loading} type="button">
           {loading ? (
@@ -162,7 +103,57 @@ export default function ScanInput({ onScan }: ScanInputProps) {
           )}
         </Button>
       </div>
-      <p className="text-sm text-muted-foreground">e.g. example.com · 192.168.1.1</p>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {PROFILES.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => setProfile(p.id)}
+            className={cn(
+              "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+              profile === p.id
+                ? "border-primary/40 bg-primary/15 text-primary"
+                : "border-border text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {p.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((s) => !s)}
+          className={cn(
+            "ml-auto inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+            showAdvanced ? "border-primary/40 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+          )}
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          Modules
+        </button>
+      </div>
+
+      {showAdvanced ? (
+        <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-muted/30 p-3">
+          {MODULES.map((m) => {
+            const on = modules.includes(m.id)
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => toggleModule(m.id)}
+                className={cn(
+                  "rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors",
+                  on ? "border-primary/40 bg-primary/15 text-primary" : "border-border text-muted-foreground"
+                )}
+              >
+                {m.label}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>
   )

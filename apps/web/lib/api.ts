@@ -76,3 +76,59 @@ export async function getScanReport(scan_id: string) {
 export async function getScanDiff(scan_id: string) {
   return apiFetch<import("./types").DiffResult>(`/scans/${scan_id}/diff`)
 }
+
+export interface TargetHistory {
+  target: string
+  scans: {
+    scan_id: string
+    status: string
+    risk_score: number | null
+    risk_label: string | null
+    started_at: string | null
+    completed_at: string | null
+  }[]
+}
+
+export async function getTargetHistory(target: string) {
+  return apiFetch<TargetHistory>(`/targets/${encodeURIComponent(target)}/history`)
+}
+
+// --- Schedules ---
+import type { Schedule, Alert } from "./types"
+
+export interface ScheduleCreate {
+  target: string
+  profile?: string
+  port_range?: string
+  modules?: string[]
+  interval_minutes: number
+}
+
+export async function listSchedules() {
+  return apiFetch<Schedule[]>("/schedules")
+}
+
+export async function createSchedule(payload: ScheduleCreate) {
+  return apiFetch<Schedule>("/schedules", { method: "POST", body: JSON.stringify(payload) })
+}
+
+export async function toggleSchedule(id: string) {
+  return apiFetch<Schedule>(`/schedules/${id}/toggle`, { method: "POST" })
+}
+
+export async function deleteSchedule(id: string) {
+  return apiFetch<{ deleted: boolean }>(`/schedules/${id}`, { method: "DELETE" })
+}
+
+// --- Alerts ---
+export async function listAlerts() {
+  return apiFetch<Alert[]>("/alerts")
+}
+
+export async function markAlertRead(id: string) {
+  return apiFetch<{ read: boolean }>(`/alerts/${id}/read`, { method: "POST" })
+}
+
+export async function markAllAlertsRead() {
+  return apiFetch<{ updated: number }>("/alerts/read-all", { method: "POST" })
+}
