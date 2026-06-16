@@ -127,6 +127,25 @@ def _get_top_findings(cves: list[CVEResult], limit: int = TOP_FINDINGS_LIMIT) ->
     return sorted_cves[:limit]
 
 
+def _merge_subdomains(
+    subdomains: list[SubdomainResult],
+    osint: Optional[OSINTResult],
+) -> list[SubdomainResult]:
+    """Merge certificate-transparency subdomains (from crt.sh, stored on the
+    OSINT result) into the unified subdomain list, deduping by name and
+    preserving the brute-forced entries which carry resolved IPs."""
+    merged: list[SubdomainResult] = list(subdomains or [])
+    seen = {sub.subdomain.lower() for sub in merged}
+    if osint and osint.subdomains_from_certs:
+        for name in osint.subdomains_from_certs:
+            key = (name or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            merged.append(SubdomainResult(subdomain=key, source="cert_transparency"))
+    return merged
+
+
 def _parse_started_at(started_at: Optional[str]) -> Optional[datetime]:
     """Parse an ISO 8601 datetime string and return a UTC datetime."""
     if not started_at:
@@ -198,6 +217,7 @@ def generate_report(
         risk_label = get_risk_label(score)
         severity_summary = _build_severity_summary(cves)
         top_findings = _get_top_findings(cves)
+        subdomains = _merge_subdomains(subdomains, osint)
 
         started_dt = _parse_started_at(started_at)
         now = datetime.now(timezone.utc)
