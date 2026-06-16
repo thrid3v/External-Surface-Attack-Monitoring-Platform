@@ -32,6 +32,8 @@ from scanner_core.port_scanner import scan_ports
 from scanner_core.report_gen import generate_report
 from scanner_core.service_probe import audit_all_tls, probe_all_http_ports
 from scanner_core.web_audit import audit_web
+from scanner_core.takeover import check_takeovers
+from scanner_core.email_audit import audit_email
 
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
@@ -302,6 +304,32 @@ def run_scan(
                 logger.info("scan_worker: scan=%s web_audit found %d findings", scan_id, len(findings))
             except Exception as exc:
                 errors["web_audit"] = str(exc)
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "takeover_check" in allowed_modules:
+            _set_module_running(db, scan, "takeover_check")
+            modules_run.append("takeover_check")
+            try:
+                names = {getattr(s, "subdomain", None) for s in subdomains if getattr(s, "subdomain", None)}
+                if osint is not None and getattr(osint, "subdomains_from_certs", None):
+                    names.update(osint.subdomains_from_certs)
+                names.add(target)
+                findings.extend(check_takeovers(sorted(n for n in names if n)))
+            except Exception as exc:
+                errors["takeover_check"] = str(exc)
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "email_audit" in allowed_modules:
+            _set_module_running(db, scan, "email_audit")
+            modules_run.append("email_audit")
+            try:
+                findings.extend(audit_email(target))
+            except Exception as exc:
+                errors["email_audit"] = str(exc)
 
         if _maybe_fail_on_timeout(db, scan, start_time):
             return {"status": "failed"}
