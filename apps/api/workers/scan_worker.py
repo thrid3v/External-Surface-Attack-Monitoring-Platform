@@ -129,6 +129,8 @@ def run_scan(
         ports: list = []
         dns_records: list = []
         subdomains: list = []
+        zone_transfer_vulnerable: bool = False
+        zone_transfer_records: list = []
         osint = None
         http_findings: list = []
         errors: dict[str, str] = {}
@@ -169,11 +171,19 @@ def run_scan(
                 dns_data = run_dns_enum(target)
                 dns_records = dns_data.get("dns_records", []) if isinstance(dns_data, dict) else []
                 subdomains = dns_data.get("subdomains", []) if isinstance(dns_data, dict) else []
-                logger.info("scan_worker: scan=%s dns_enum complete", scan_id)
+                zone_transfer_vulnerable = bool(dns_data.get("zone_transfer_vulnerable")) if isinstance(dns_data, dict) else False
+                zone_transfer_records = dns_data.get("zone_transfer_records", []) if isinstance(dns_data, dict) else []
+                logger.info(
+                    "scan_worker: scan=%s dns_enum complete (zone_transfer_vulnerable=%s)",
+                    scan_id,
+                    zone_transfer_vulnerable,
+                )
             except Exception as exc:
                 errors["dns_enum"] = str(exc)
                 dns_records = []
                 subdomains = []
+                zone_transfer_vulnerable = False
+                zone_transfer_records = []
 
         if _maybe_fail_on_timeout(db, scan, start_time):
             return {"status": "failed"}
@@ -212,6 +222,8 @@ def run_scan(
             osint=osint,
             dns_records=dns_records,
             subdomains=subdomains,
+            zone_transfer_vulnerable=zone_transfer_vulnerable,
+            zone_transfer_records=zone_transfer_records,
             http_findings=http_findings,
             modules_run=modules_run,
             errors=errors,

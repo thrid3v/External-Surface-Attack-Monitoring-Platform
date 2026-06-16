@@ -71,6 +71,7 @@ class SubdomainResult(BaseModel):
     subdomain: str = Field(..., description="Discovered subdomain, e.g. dev.example.com")
     ip_address: Optional[str] = Field(None, description="Resolved IP address for the subdomain")
     is_different_ip: bool = Field(False, description="True if subdomain IP differs from the main domain")
+    source: str = Field("dns_bruteforce", description="How the subdomain was discovered: dns_bruteforce | cert_transparency")
 
 
 class CertInfo(BaseModel):
@@ -132,6 +133,8 @@ class ScanReport(BaseModel):
     cves: list[CVEResult] = Field(default_factory=list, description="Deduplicated CVE findings across all ports")
     dns_records: list[DNSRecord] = Field(default_factory=list, description="Collected DNS records")
     subdomains: list[SubdomainResult] = Field(default_factory=list, description="Discovered subdomains")
+    zone_transfer_vulnerable: bool = Field(False, description="True if any authoritative name server allowed a DNS zone transfer (AXFR)")
+    zone_transfer_records: list[str] = Field(default_factory=list, description="Records exposed via zone transfer, if vulnerable")
     osint: Optional[OSINTResult] = Field(None, description="Aggregated OSINT findings")
     http_findings: list[HttpFinding] = Field(default_factory=list, description="HTTP and TLS probe results")
     top_findings: list[CVEResult] = Field(default_factory=list, description="Top CVE findings by score")
