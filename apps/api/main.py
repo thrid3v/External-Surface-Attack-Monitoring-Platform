@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from db.models import Base, init_db, get_engine
 from routers.scans import router as scans_router
 from routers.targets import router as targets_router
+from routers.schedules import router as schedules_router
+from routers.alerts import router as alerts_router
 
 load_dotenv()
 
@@ -28,6 +30,8 @@ app.add_middleware(
 
 app.include_router(scans_router, prefix="/api/scans", tags=["scans"])
 app.include_router(targets_router, prefix="/api/targets", tags=["targets"])
+app.include_router(schedules_router, prefix="/api/schedules", tags=["schedules"])
+app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
 
 
 @app.on_event("startup")

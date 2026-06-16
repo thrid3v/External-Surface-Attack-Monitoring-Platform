@@ -3,12 +3,14 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from celery import Celery
 from celery.exceptions import Reject
 from dotenv import load_dotenv
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 # Ensure the API package and local scanner_core package are on the import path.
@@ -21,7 +23,8 @@ for path in (str(API_ROOT), str(PACKAGES_ROOT)):
         sys.path.insert(0, path)
 
 from constants import MODULE_ORDER
-from db.models import Scan, SessionLocal
+from db.models import Alert, Scan, Schedule, SessionLocal
+from services.diff import diff_reports
 from scanner_core.cve_lookup import lookup_cves
 from scanner_core.dns_enum import run_dns_enum
 from scanner_core.osint_fetcher import fetch_all
@@ -50,7 +53,21 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
+    # Hard/soft limits so a hung module (e.g. nmap on a huge range) can't run
+    # forever. (Enforced via signals on prefork pools; on the Windows solo pool
+    # the in-task _maybe_fail_on_timeout check below is the active safeguard.)
+    task_soft_time_limit=SCAN_TIMEOUT_SECONDS + 30,
+    task_time_limit=SCAN_TIMEOUT_SECONDS + 60,
 )
+
+# Periodic dispatcher: every 5 minutes, enqueue any recurring scans that are due.
+# Run with: celery -A workers.scan_worker beat
+celery_app.conf.beat_schedule = {
+    "enqueue-due-scans": {
+        "task": "enqueue_due_scans",
+        "schedule": 300.0,
+    }
+}
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -92,6 +109,66 @@ def _maybe_fail_on_timeout(db: Session, scan: Scan, start_time: float) -> bool:
         logger.error("scan_worker: scan=%s timed out after %s seconds", scan.id, elapsed)
         return True
     return False
+
+
+def _create_change_alerts(db: Session, scan: Scan, report) -> None:
+    """Compare the just-completed scan with the user's previous completed scan
+    of the same target and record alerts for newly introduced risk."""
+    if not scan.owner_email:
+        return
+    previous = (
+        db.query(Scan)
+        .filter(
+            Scan.owner_email == scan.owner_email,
+            Scan.target == scan.target,
+            Scan.status == "complete",
+            Scan.id != scan.id,
+            Scan.started_at < scan.started_at,
+        )
+        .order_by(desc(Scan.started_at), desc(Scan.created_at))
+        .first()
+    )
+    if previous is None or previous.result is None:
+        return  # first completed scan for this target — nothing to compare against
+
+    diff = diff_reports(previous.result, report.model_dump())
+    now = _now()
+    alerts: list[Alert] = []
+
+    new_high = [c for c in diff["new_cves"] if (c.get("severity") or "").upper() in ("CRITICAL", "HIGH")]
+    if new_high:
+        has_critical = any((c.get("severity") or "").upper() == "CRITICAL" for c in new_high)
+        alerts.append(Alert(
+            id=str(uuid.uuid4()),
+            owner_email=scan.owner_email,
+            target=scan.target,
+            scan_id=scan.id,
+            type="new_cve",
+            severity="critical" if has_critical else "high",
+            message=f"{len(new_high)} new high/critical finding(s) on {scan.target}",
+            read=False,
+            created_at=now,
+        ))
+
+    risk_delta = diff.get("risk_delta")
+    if isinstance(risk_delta, int) and risk_delta > 0:
+        alerts.append(Alert(
+            id=str(uuid.uuid4()),
+            owner_email=scan.owner_email,
+            target=scan.target,
+            scan_id=scan.id,
+            type="risk_increase",
+            severity="warning",
+            message=f"Risk score rose {diff['previous_risk']} -> {diff['current_risk']} on {scan.target}",
+            read=False,
+            created_at=now,
+        ))
+
+    for alert in alerts:
+        db.add(alert)
+    if alerts:
+        db.commit()
+        logger.info("scan_worker: scan=%s generated %d alert(s)", scan.id, len(alerts))
 
 
 @celery_app.task(
@@ -237,6 +314,11 @@ def run_scan(
         scan.current_module = None
         _commit_scan(db, scan)
 
+        try:
+            _create_change_alerts(db, scan, report)
+        except Exception:
+            logger.exception("scan_worker: scan=%s alert generation failed", scan_id)
+
         logger.info("scan_worker: scan=%s complete status=complete", scan_id)
         return {"status": "complete"}
     except Exception as exc:
@@ -247,5 +329,42 @@ def run_scan(
             _commit_scan(db, scan)
         logger.exception("scan_worker: scan=%s failed with exception", scan_id)
         raise
+    finally:
+        db.close()
+
+
+@celery_app.task(name="enqueue_due_scans")
+def enqueue_due_scans() -> dict[str, int]:
+    """Beat-driven dispatcher: enqueue a scan for every recurring schedule whose
+    next_run_at is due, then advance the schedule's next_run_at."""
+    db = SessionLocal()
+    queued = 0
+    try:
+        now = _now()
+        due = (
+            db.query(Schedule)
+            .filter(Schedule.enabled.is_(True), Schedule.next_run_at <= now)
+            .all()
+        )
+        for schedule in due:
+            scan_id = str(uuid.uuid4())
+            port_range = schedule.port_range or "1-1000"
+            modules = schedule.modules_list or list(MODULE_ORDER)
+            scan = Scan(
+                id=scan_id,
+                owner_email=schedule.owner_email,
+                target=schedule.target,
+                status="pending",
+                port_range=port_range,
+                created_at=now,
+            )
+            db.add(scan)
+            schedule.last_run_at = now
+            schedule.next_run_at = now + timedelta(minutes=schedule.interval_minutes)
+            db.commit()
+            run_scan.delay(scan_id, schedule.target, port_range, modules)
+            queued += 1
+            logger.info("scan_worker: enqueued scheduled scan=%s target=%s", scan_id, schedule.target)
+        return {"queued": queued}
     finally:
         db.close()

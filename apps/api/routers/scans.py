@@ -13,6 +13,7 @@ from auth import get_current_user
 from constants import MODULE_ORDER, PORT_PROFILES
 from db.models import Scan
 from deps import get_db
+from services.diff import diff_reports
 from utils import format_datetime
 from workers.scan_worker import run_scan
 
@@ -189,6 +190,37 @@ def get_scan_status(
         modules_complete=_get_modules_complete(scan.current_module, scan.status),
         started_at=format_datetime(scan.started_at),
     )
+
+
+@router.get("/{scan_id}/diff")
+def get_scan_diff(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> Any:
+    """Diff a completed scan against the user's previous completed scan of the
+    same target (new/resolved CVEs, opened/closed ports, risk delta)."""
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.owner_email == user).first()
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if scan.status != "complete" or scan.result is None:
+        raise HTTPException(status_code=409, detail="Scan is not complete")
+
+    previous = (
+        db.query(Scan)
+        .filter(
+            Scan.owner_email == user,
+            Scan.target == scan.target,
+            Scan.status == "complete",
+            Scan.id != scan.id,
+            Scan.started_at < scan.started_at,
+        )
+        .order_by(desc(Scan.started_at), desc(Scan.created_at))
+        .first()
+    )
+
+    diff = diff_reports(previous.result if previous else None, scan.result)
+    return {"scan_id": scan.id, "target": scan.target, **diff}
 
 
 @router.get("", response_model=list[ScanSummary])
