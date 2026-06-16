@@ -17,6 +17,7 @@ from typing import Optional
 from .models import (
     CVEResult,
     DNSRecord,
+    Finding,
     HttpFinding,
     OSINTResult,
     PortResult,
@@ -64,9 +65,10 @@ def calculate_risk_score(
     http_findings: list[HttpFinding],
     osint: Optional[OSINTResult] = None,
     zone_transfer_vulnerable: bool = False,
+    findings: Optional[list[Finding]] = None,
 ) -> int:
-    """Calculate a 0-100 risk score from CVEs, open ports, HTTP hygiene, and
-    additional exposure signals (zone transfer, certs, domain, Shodan vulns)."""
+    """Calculate a 0-100 risk score from CVEs, open ports, HTTP hygiene,
+    additional exposure signals, and non-CVE findings."""
     if not cves:
         max_cvss = 0.0
     else:
@@ -94,7 +96,12 @@ def calculate_risk_score(
         exposure += min(len(osint.shodan_vulns) * 3, 12)
     component_5 = min(exposure, 25)
 
-    final_score = int(component_1 + component_2 + component_3 + component_4 + component_5)
+    f_crit = sum(1 for f in findings or [] if (f.severity or "").upper() == "CRITICAL")
+    f_high = sum(1 for f in findings or [] if (f.severity or "").upper() == "HIGH")
+    f_med = sum(1 for f in findings or [] if (f.severity or "").upper() == "MEDIUM")
+    component_6 = min(f_crit * 10 + f_high * 5 + f_med * 2, 30)
+
+    final_score = int(component_1 + component_2 + component_3 + component_4 + component_5 + component_6)
     return min(final_score, 100)
 
 
@@ -111,11 +118,18 @@ def get_risk_label(score: int) -> str:
     return "MINIMAL"
 
 
-def _build_severity_summary(cves: list[CVEResult]) -> dict[str, int]:
-    """Count CVEs by severity into a normalized summary dict."""
+def _build_severity_summary(
+    cves: list[CVEResult],
+    findings: Optional[list[Finding]] = None,
+) -> dict[str, int]:
+    """Count CVEs and non-CVE findings by severity into a normalized summary."""
     summary = {"critical": 0, "high": 0, "medium": 0, "low": 0}
     for cve in cves or []:
         severity = (cve.severity or "").lower()
+        if severity in summary:
+            summary[severity] += 1
+    for finding in findings or []:
+        severity = (finding.severity or "").lower()
         if severity in summary:
             summary[severity] += 1
     return summary
@@ -170,6 +184,7 @@ def generate_report(
     zone_transfer_vulnerable: bool = False,
     zone_transfer_records: Optional[list[str]] = None,
     http_findings: Optional[list[HttpFinding]] = None,
+    findings: Optional[list[Finding]] = None,
     modules_run: Optional[list[str]] = None,
     errors: Optional[dict[str, str]] = None,
 ) -> ScanReport:
@@ -180,6 +195,7 @@ def generate_report(
         subdomains = subdomains or []
         zone_transfer_records = zone_transfer_records or []
         http_findings = http_findings or []
+        findings = findings or []
         errors = errors or {}
         # Use the caller-supplied list when available; fall back to inference
         # only for backwards compatibility with direct calls that omit it.
@@ -213,9 +229,10 @@ def generate_report(
             http_findings,
             osint=osint,
             zone_transfer_vulnerable=zone_transfer_vulnerable,
+            findings=findings,
         )
         risk_label = get_risk_label(score)
-        severity_summary = _build_severity_summary(cves)
+        severity_summary = _build_severity_summary(cves, findings)
         top_findings = _get_top_findings(cves)
         subdomains = _merge_subdomains(subdomains, osint)
 
@@ -240,6 +257,7 @@ def generate_report(
             zone_transfer_records=zone_transfer_records,
             osint=osint,
             http_findings=http_findings,
+            findings=findings,
             top_findings=top_findings,
             started_at=started_at,
             completed_at=now.isoformat(),
@@ -263,6 +281,7 @@ def generate_report(
             subdomains=subdomains or [],
             osint=osint,
             http_findings=http_findings or [],
+            findings=findings or [],
             top_findings=[],
             started_at=started_at,
             completed_at=datetime.now(timezone.utc).isoformat(),

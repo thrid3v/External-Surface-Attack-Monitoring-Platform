@@ -115,6 +115,21 @@ class HttpFinding(BaseModel):
     cert: Optional[CertInfo] = Field(None, description="TLS certificate details for the endpoint")
 
 
+class Finding(BaseModel):
+    """A generic security finding that is not a versioned CVE — misconfigurations,
+    exposures, takeovers, weak TLS, template (nuclei) hits, etc."""
+
+    title: str = Field(..., description="Short finding title")
+    severity: str = Field(..., description="Severity label: CRITICAL|HIGH|MEDIUM|LOW|INFO")
+    category: str = Field(..., description="Finding category, e.g. web_exposure|tls|takeover|email|nuclei")
+    description: str = Field("", description="What the finding is and why it matters")
+    target: Optional[str] = Field(None, description="Affected URL, host, or subdomain")
+    evidence: Optional[str] = Field(None, description="Evidence supporting the finding")
+    remediation: Optional[str] = Field(None, description="Suggested remediation")
+    source: str = Field("", description="Module that produced the finding")
+    references: list[str] = Field(default_factory=list, description="Reference URLs")
+
+
 class ScanStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -137,6 +152,7 @@ class ScanReport(BaseModel):
     zone_transfer_records: list[str] = Field(default_factory=list, description="Records exposed via zone transfer, if vulnerable")
     osint: Optional[OSINTResult] = Field(None, description="Aggregated OSINT findings")
     http_findings: list[HttpFinding] = Field(default_factory=list, description="HTTP and TLS probe results")
+    findings: list[Finding] = Field(default_factory=list, description="Non-CVE security findings (misconfig, exposure, takeover, TLS, nuclei)")
     top_findings: list[CVEResult] = Field(default_factory=list, description="Top CVE findings by score")
     started_at: Optional[str] = Field(None, description="Scan start timestamp")
     completed_at: Optional[str] = Field(None, description="Scan completion timestamp")

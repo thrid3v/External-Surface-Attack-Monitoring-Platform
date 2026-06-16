@@ -75,6 +75,18 @@ export interface HttpFinding {
   cert?: CertInfo | null
 }
 
+export interface Finding {
+  title: string
+  severity: string
+  category: string
+  description?: string
+  target?: string | null
+  evidence?: string | null
+  remediation?: string | null
+  source?: string
+  references?: string[]
+}
+
 export interface ScanReport {
   scan_id: string
   target: string
@@ -90,6 +102,7 @@ export interface ScanReport {
   zone_transfer_records?: string[]
   osint: OSINTResult | null
   http_findings: HttpFinding[]
+  findings: Finding[]
   top_findings: CVEResult[]
   started_at: string | null
   completed_at: string | null

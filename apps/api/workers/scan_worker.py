@@ -210,6 +210,7 @@ def run_scan(
         zone_transfer_records: list = []
         osint = None
         http_findings: list = []
+        findings: list = []
         errors: dict[str, str] = {}
         # Track which modules actually executed (regardless of success/failure).
         modules_run: list[str] = []
@@ -302,6 +303,7 @@ def run_scan(
             zone_transfer_vulnerable=zone_transfer_vulnerable,
             zone_transfer_records=zone_transfer_records,
             http_findings=http_findings,
+            findings=findings,
             modules_run=modules_run,
             errors=errors,
         )
