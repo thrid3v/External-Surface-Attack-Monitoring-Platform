@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
+from auth import get_current_user
 from constants import MODULE_ORDER, PORT_PROFILES
 from db.models import Scan
 from deps import get_db
@@ -95,7 +96,11 @@ def _get_modules_complete(current_module: str | None, status: str) -> list[str]:
 
 
 @router.post("", response_model=ScanQueuedResponse)
-def create_scan(payload: ScanCreate, db: Session = Depends(get_db)) -> ScanQueuedResponse:
+def create_scan(
+    payload: ScanCreate,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> ScanQueuedResponse:
     if not payload.i_own_this_target:
         raise HTTPException(
             status_code=403,
@@ -117,6 +122,7 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db)) -> ScanQueue
     scan_id = str(uuid.uuid4())
     scan = Scan(
         id=scan_id,
+        owner_email=user,
         target=target,
         status="pending",
         port_range=port_range,
@@ -134,8 +140,12 @@ def create_scan(payload: ScanCreate, db: Session = Depends(get_db)) -> ScanQueue
 
 
 @router.get("/{scan_id}")
-def get_scan(scan_id: str, db: Session = Depends(get_db)) -> Any:
-    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+def get_scan(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> Any:
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.owner_email == user).first()
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
 
@@ -163,8 +173,12 @@ def get_scan(scan_id: str, db: Session = Depends(get_db)) -> Any:
 
 
 @router.get("/{scan_id}/status", response_model=ScanStatusResponse)
-def get_scan_status(scan_id: str, db: Session = Depends(get_db)) -> ScanStatusResponse:
-    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+def get_scan_status(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> ScanStatusResponse:
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.owner_email == user).first()
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
 
@@ -178,9 +192,13 @@ def get_scan_status(scan_id: str, db: Session = Depends(get_db)) -> ScanStatusRe
 
 
 @router.get("", response_model=list[ScanSummary])
-def list_scans(db: Session = Depends(get_db)) -> list[ScanSummary]:
+def list_scans(
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> list[ScanSummary]:
     scans = (
         db.query(Scan)
+        .filter(Scan.owner_email == user)
         .order_by(desc(Scan.started_at), desc(Scan.created_at))
         .limit(20)
         .all()
@@ -200,8 +218,12 @@ def list_scans(db: Session = Depends(get_db)) -> list[ScanSummary]:
 
 
 @router.delete("/{scan_id}")
-def delete_scan(scan_id: str, db: Session = Depends(get_db)) -> dict[str, bool]:
-    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+def delete_scan(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> dict[str, bool]:
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.owner_email == user).first()
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
     db.delete(scan)

@@ -31,6 +31,7 @@ export interface SubdomainResult {
   subdomain: string
   ip_address?: string | null
   is_different_ip?: boolean
+  source?: string
 }
 
 export interface WHOISInfo {
@@ -85,6 +86,8 @@ export interface ScanReport {
   cves: CVEResult[]
   dns_records: DNSRecord[]
   subdomains: SubdomainResult[]
+  zone_transfer_vulnerable?: boolean
+  zone_transfer_records?: string[]
   osint: OSINTResult | null
   http_findings: HttpFinding[]
   top_findings: CVEResult[]
@@ -93,4 +96,47 @@ export interface ScanReport {
   scan_duration_seconds: number | null
   modules_run: string[]
   errors: Record<string, string>
+}
+
+export interface DiffCve {
+  cve_id: string
+  severity: string
+  cvss_score: number | null
+}
+
+export interface DiffResult {
+  scan_id: string
+  target: string
+  compared_to: string | null
+  risk_delta: number | null
+  current_risk: number | null
+  previous_risk: number | null
+  new_cves: DiffCve[]
+  resolved_cves: DiffCve[]
+  opened_ports: number[]
+  closed_ports: number[]
+}
+
+export interface Schedule {
+  id: string
+  target: string
+  port_range: string
+  profile: string | null
+  modules: string[] | null
+  interval_minutes: number
+  enabled: boolean
+  next_run_at: string | null
+  last_run_at: string | null
+  created_at: string | null
+}
+
+export interface Alert {
+  id: string
+  target: string
+  scan_id: string | null
+  type: string
+  severity: string
+  message: string
+  read: boolean
+  created_at: string | null
 }

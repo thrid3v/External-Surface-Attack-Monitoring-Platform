@@ -49,6 +49,7 @@ class Scan(Base):
     __tablename__ = "scans"
 
     id = Column(String(36), primary_key=True, nullable=False)
+    owner_email = Column(String(320), nullable=True, index=True)
     target = Column(String(512), nullable=False, index=True)
     status = Column(String(20), nullable=False, index=True)
     port_range = Column(String(100), nullable=True)

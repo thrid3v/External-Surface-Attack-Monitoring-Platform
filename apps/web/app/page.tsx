@@ -52,7 +52,7 @@ import Link from "next/link"
 import ScanInputClient from "@/components/scan_input_client"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardContent } from "@/components/ui/card"
-import { getRecentScans } from "@/lib/api"
+import { getRecentScansServer } from "@/lib/server-api"
 
 
 function badgeVariant(label: string | null) {
@@ -93,7 +93,7 @@ function formatTimeAgo(value: string) {
 }
 
 export default async function Home() {
-  const recentScans = await getRecentScans()
+  const recentScans = await getRecentScansServer()
 
   return (
     <div className="flex min-h-screen flex-col items-center bg-zinc-50 px-6 py-10 font-sans dark:bg-black">

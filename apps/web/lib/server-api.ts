@@ -1,0 +1,46 @@
+import "server-only"
+
+import { getServerSession } from "next-auth"
+
+import { authOptions } from "./auth"
+import type { RecentScan } from "./api"
+
+const API_URL = process.env.API_URL ?? "http://127.0.0.1:8000"
+const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET ?? ""
+
+/**
+ * Server-side fetch to FastAPI for use in Server Components. Reads the NextAuth
+ * session and forwards the user identity + shared secret, mirroring the BFF
+ * proxy used by client components.
+ */
+export async function serverFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const session = await getServerSession(authOptions)
+  const email = session?.user?.email
+  if (!email) {
+    throw new Error("Not authenticated")
+  }
+
+  const response = await fetch(`${API_URL}/api${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Internal-Secret": INTERNAL_SECRET,
+      "X-User-Email": email,
+      ...(init.headers ?? {}),
+    },
+    cache: "no-store",
+  })
+
+  if (!response.ok) {
+    throw new Error(`API request failed (${response.status})`)
+  }
+  return response.json() as Promise<T>
+}
+
+export async function getRecentScansServer(): Promise<RecentScan[]> {
+  try {
+    return await serverFetch<RecentScan[]>("/scans")
+  } catch {
+    return []
+  }
+}
