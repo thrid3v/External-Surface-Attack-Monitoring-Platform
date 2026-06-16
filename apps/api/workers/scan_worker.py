@@ -31,6 +31,7 @@ from scanner_core.osint_fetcher import fetch_all
 from scanner_core.port_scanner import scan_ports
 from scanner_core.report_gen import generate_report
 from scanner_core.service_probe import probe_all_http_ports
+from scanner_core.web_audit import audit_web
 
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
@@ -288,6 +289,18 @@ def run_scan(
             except Exception as exc:
                 errors["service_probe"] = str(exc)
                 http_findings = []
+
+        if _maybe_fail_on_timeout(db, scan, start_time):
+            return {"status": "failed"}
+
+        if "web_audit" in allowed_modules:
+            _set_module_running(db, scan, "web_audit")
+            modules_run.append("web_audit")
+            try:
+                findings.extend(audit_web(target, ports))
+                logger.info("scan_worker: scan=%s web_audit found %d findings", scan_id, len(findings))
+            except Exception as exc:
+                errors["web_audit"] = str(exc)
 
         if _maybe_fail_on_timeout(db, scan, start_time):
             return {"status": "failed"}
