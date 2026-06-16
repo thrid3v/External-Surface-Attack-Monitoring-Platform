@@ -30,7 +30,7 @@ from scanner_core.dns_enum import run_dns_enum
 from scanner_core.osint_fetcher import fetch_all
 from scanner_core.port_scanner import scan_ports
 from scanner_core.report_gen import generate_report
-from scanner_core.service_probe import probe_all_http_ports
+from scanner_core.service_probe import audit_all_tls, probe_all_http_ports
 from scanner_core.web_audit import audit_web
 
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
@@ -285,6 +285,7 @@ def run_scan(
             modules_run.append("service_probe")
             try:
                 http_findings = probe_all_http_ports(target, ports)
+                findings.extend(audit_all_tls(target, ports))
                 logger.info("scan_worker: scan=%s service_probe complete", scan_id)
             except Exception as exc:
                 errors["service_probe"] = str(exc)
