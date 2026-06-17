@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
@@ -85,7 +85,18 @@ def update_notification_settings(
     user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
     settings = _get_or_create(db, user)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+
+    # Reject internal/SSRF webhook targets at save time (also guarded at send).
+    candidate_url = updates.get("webhook_url", settings.webhook_url)
+    wants_webhook = updates.get("webhook_enabled", settings.webhook_enabled)
+    if wants_webhook and candidate_url:
+        try:
+            notifications.validate_webhook_url(candidate_url)
+        except notifications.WebhookURLNotAllowed as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+    for field, value in updates.items():
         setattr(settings, field, value)
     db.commit()
     db.refresh(settings)

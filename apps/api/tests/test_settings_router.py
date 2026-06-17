@@ -37,7 +37,7 @@ def test_put_upserts_settings(db):
             "email_enabled": True,
             "email_address": "alerts@acme.com",
             "webhook_enabled": True,
-            "webhook_url": "https://hook.example/x",
+            "webhook_url": "https://93.184.216.34/hook",
             "min_severity": "high",
         },
     )
@@ -46,7 +46,7 @@ def test_put_upserts_settings(db):
 
     # Persisted: a follow-up GET reflects the update (no duplicate row).
     again = client.get("/api/settings/notifications").json()
-    assert again["webhook_url"] == "https://hook.example/x"
+    assert again["webhook_url"] == "https://93.184.216.34/hook"
     assert again["min_severity"] == "high"
 
 
@@ -56,11 +56,21 @@ def test_put_rejects_unknown_severity(db):
     assert res.status_code == 422
 
 
+def test_put_rejects_internal_webhook_url(db):
+    """Saving a webhook pointed at an internal/metadata address is rejected (SSRF)."""
+    client = make_client(db)
+    res = client.put(
+        "/api/settings/notifications",
+        json={"webhook_enabled": True, "webhook_url": "http://169.254.169.254/latest/meta-data/"},
+    )
+    assert res.status_code == 422
+
+
 def test_test_endpoint_reports_success(db, monkeypatch):
     client = make_client(db)
     client.put(
         "/api/settings/notifications",
-        json={"webhook_enabled": True, "webhook_url": "https://hook.example/x"},
+        json={"webhook_enabled": True, "webhook_url": "https://93.184.216.34/hook"},
     )
     monkeypatch.setattr(notifications, "send_webhook", lambda s, a: None)
     res = client.post("/api/settings/notifications/test")
@@ -72,7 +82,7 @@ def test_test_endpoint_reports_failure(db, monkeypatch):
     client = make_client(db)
     client.put(
         "/api/settings/notifications",
-        json={"webhook_enabled": True, "webhook_url": "https://hook.example/x"},
+        json={"webhook_enabled": True, "webhook_url": "https://93.184.216.34/hook"},
     )
 
     def boom(s, a):

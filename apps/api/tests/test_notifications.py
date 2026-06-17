@@ -3,6 +3,8 @@
 import uuid
 from datetime import datetime, timezone
 
+import pytest
+
 from db.models import Alert, NotificationSettings
 from services import notifications
 
@@ -120,6 +122,7 @@ def test_send_webhook_posts_expected_payload(monkeypatch):
         return _Resp()
 
     monkeypatch.setattr(notifications.httpx, "post", fake_post)
+    monkeypatch.setattr(notifications, "_resolve_ips", lambda host: ["93.184.216.34"])
     monkeypatch.setenv("FRONTEND_URL", "https://easm.example")
 
     settings = NotificationSettings(
@@ -134,6 +137,48 @@ def test_send_webhook_posts_expected_payload(monkeypatch):
     assert captured["json"]["severity"] == "critical"
     assert captured["json"]["url"] == "https://easm.example/scan/scan-1"
     assert captured["raised"] is True
+
+
+def test_send_webhook_blocks_cloud_metadata_address(monkeypatch):
+    posted = []
+    monkeypatch.setattr(notifications.httpx, "post", lambda *a, **k: posted.append(a))
+    s = NotificationSettings(
+        id="s", owner_email="u@example.com", webhook_enabled=True,
+        webhook_url="http://169.254.169.254/latest/meta-data/", min_severity="warning",
+    )
+    with pytest.raises(notifications.WebhookURLNotAllowed):
+        notifications.send_webhook(s, _make_alert("critical"))
+    assert posted == []  # never POSTed to the internal address
+
+
+def test_send_webhook_blocks_loopback(monkeypatch):
+    monkeypatch.setattr(notifications, "_resolve_ips", lambda host: ["127.0.0.1"])
+    posted = []
+    monkeypatch.setattr(notifications.httpx, "post", lambda *a, **k: posted.append(a))
+    s = NotificationSettings(
+        id="s", owner_email="u@example.com", webhook_enabled=True,
+        webhook_url="http://internal.local/hook", min_severity="warning",
+    )
+    with pytest.raises(notifications.WebhookURLNotAllowed):
+        notifications.send_webhook(s, _make_alert("critical"))
+    assert posted == []
+
+
+def test_send_webhook_allows_public_target(monkeypatch):
+    monkeypatch.setattr(notifications, "_resolve_ips", lambda host: ["93.184.216.34"])
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+    posted = []
+    monkeypatch.setattr(notifications.httpx, "post", lambda url, json, timeout: (posted.append(url), _Resp())[1])
+    s = NotificationSettings(
+        id="s", owner_email="u@example.com", webhook_enabled=True,
+        webhook_url="https://hooks.example.com/x", min_severity="warning",
+    )
+    notifications.send_webhook(s, _make_alert("critical"))  # must not raise
+    assert posted == ["https://hooks.example.com/x"]
 
 
 def test_send_email_skips_when_smtp_unconfigured(monkeypatch):

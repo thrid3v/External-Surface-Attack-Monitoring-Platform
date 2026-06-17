@@ -12,10 +12,13 @@ SMTP transport is configured server-side via environment variables; the per-user
 row only decides *whether* and *where* to deliver.
 """
 
+import ipaddress
 import logging
 import os
 import smtplib
+import socket
 from email.message import EmailMessage
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy.orm import Session
@@ -23,6 +26,52 @@ from sqlalchemy.orm import Session
 from db.models import Alert, NotificationSettings
 
 logger = logging.getLogger(__name__)
+
+
+class WebhookURLNotAllowed(ValueError):
+    """Raised when a webhook URL targets a non-public address (SSRF guard)."""
+
+
+def _resolve_ips(host: str) -> list[str]:
+    """Resolve a hostname to its IP addresses (empty list on failure)."""
+    try:
+        return [info[4][0] for info in socket.getaddrinfo(host, None)]
+    except (socket.gaierror, UnicodeError):
+        return []
+
+
+def _is_public_ip(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    )
+
+
+def validate_webhook_url(url: str | None) -> None:
+    """Reject webhook URLs that aren't http(s) to a public address.
+
+    Prevents server-side request forgery: a user must not be able to make the
+    server POST to loopback, RFC-1918, link-local (e.g. 169.254.169.254 cloud
+    metadata), or otherwise-internal addresses.
+    """
+    parsed = urlparse(url or "")
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise WebhookURLNotAllowed(f"Webhook URL must be a valid http(s) URL: {url!r}")
+    host = parsed.hostname
+    try:
+        ipaddress.ip_address(host)
+        ips = [host]  # literal IP — check it directly, no DNS
+    except ValueError:
+        ips = _resolve_ips(host)
+    if not ips:
+        raise WebhookURLNotAllowed(f"Could not resolve webhook host: {host}")
+    for ip in ips:
+        if not _is_public_ip(ip):
+            raise WebhookURLNotAllowed(f"Webhook host resolves to a non-public address ({ip})")
 
 # Canonical severity ordering. Higher rank = more severe.
 SEVERITY_ORDER = {"info": 0, "warning": 1, "high": 2, "critical": 3}
@@ -111,6 +160,7 @@ def send_email(settings: NotificationSettings, alert: Alert) -> None:
 
 def send_webhook(settings: NotificationSettings, alert: Alert) -> None:
     """POST a JSON representation of the alert to the user's webhook URL."""
+    validate_webhook_url(settings.webhook_url)  # SSRF guard — checked at send time
     payload = {
         "target": alert.target,
         "severity": alert.severity,
