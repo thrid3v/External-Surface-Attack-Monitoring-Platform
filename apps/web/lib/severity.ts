@@ -8,17 +8,20 @@ export interface SeverityStyle {
   hex: string
 }
 
+// ANSI-terminal severity palette: red / amber / yellow / cyan / phosphor.
 export const SEVERITY_COLORS: Record<string, SeverityStyle> = {
-  CRITICAL: { text: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/30", dot: "bg-red-500", hex: "#ef4444" },
-  HIGH: { text: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/30", dot: "bg-orange-500", hex: "#f97316" },
-  MEDIUM: { text: "text-amber-300", bg: "bg-amber-500/10", border: "border-amber-500/30", dot: "bg-amber-400", hex: "#f59e0b" },
-  LOW: { text: "text-sky-400", bg: "bg-sky-500/10", border: "border-sky-500/30", dot: "bg-sky-500", hex: "#38bdf8" },
-  MINIMAL: { text: "text-slate-400", bg: "bg-slate-500/10", border: "border-slate-500/30", dot: "bg-slate-500", hex: "#94a3b8" },
-  NONE: { text: "text-slate-400", bg: "bg-slate-500/10", border: "border-slate-500/30", dot: "bg-slate-500", hex: "#94a3b8" },
+  CRITICAL: { text: "text-red", bg: "bg-red/10", border: "border-red/40", dot: "bg-red", hex: "#ff4d5e" },
+  HIGH: { text: "text-amber", bg: "bg-amber/10", border: "border-amber/40", dot: "bg-amber", hex: "#ffb000" },
+  MEDIUM: { text: "text-yellow", bg: "bg-yellow/10", border: "border-yellow/40", dot: "bg-yellow", hex: "#e8d44a" },
+  LOW: { text: "text-cyan", bg: "bg-cyan/10", border: "border-cyan/40", dot: "bg-cyan", hex: "#3ad0e0" },
+  MINIMAL: { text: "text-phosphor", bg: "bg-phosphor/10", border: "border-phosphor/40", dot: "bg-phosphor", hex: "#43d675" },
+  NONE: { text: "text-phosphor-dim", bg: "bg-phosphor/5", border: "border-border", dot: "bg-phosphor-dim", hex: "#2f9e54" },
+  // an incomplete scan: not "clean", just unknown — muted, never green
+  UNKNOWN: { text: "text-phosphor-dim", bg: "bg-muted", border: "border-border", dot: "bg-phosphor-dim", hex: "#5a6b5a" },
 }
 
 export function severityColor(label?: string | null): SeverityStyle {
-  return SEVERITY_COLORS[(label ?? "MINIMAL").toUpperCase()] ?? SEVERITY_COLORS.MINIMAL
+  return SEVERITY_COLORS[(label ?? "UNKNOWN").toUpperCase()] ?? SEVERITY_COLORS.UNKNOWN
 }
 
 /** Risk labels share the severity palette (CRITICAL/HIGH/MEDIUM/LOW/MINIMAL). */

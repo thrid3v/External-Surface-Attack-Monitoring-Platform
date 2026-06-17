@@ -1,5 +1,4 @@
 import Link from "next/link"
-import { Crosshair, ChevronRight } from "lucide-react"
 
 import { getTargetsServer } from "@/lib/server-api"
 import { Card, CardContent } from "@/components/ui/card"
@@ -13,37 +12,41 @@ export default async function TargetsPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <div>
-        <p className="text-xs font-medium uppercase tracking-[0.3em] text-primary">Inventory</p>
-        <h1 className="font-heading text-2xl font-semibold">Targets</h1>
-      </div>
+      <header className="border-b border-border pb-3">
+        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">// targets</h1>
+        <p className="mt-1 text-xs text-phosphor-dim">monitored hosts — last observed risk</p>
+      </header>
 
       {targets.length === 0 ? (
         <Card>
-          <CardContent className="grid place-items-center gap-2 py-12 text-center">
-            <Crosshair className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">No targets yet. Run a scan from the dashboard.</p>
+          <CardContent className="py-12 text-center text-sm text-phosphor-dim">
+            no targets yet. <span className="text-cyan">run a scan</span> from the dashboard.
           </CardContent>
         </Card>
       ) : (
         <Card>
           <CardContent className="p-0">
-            <ul className="divide-y divide-border">
+            <ul>
               {targets.map((t) => (
                 <li key={t.target}>
                   <Link
                     href={`/targets/${encodeURIComponent(t.target)}`}
-                    className="group flex items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-muted/30"
+                    className="group flex items-center justify-between gap-4 border-b border-border/50 px-4 py-3 transition-colors last:border-0 hover:bg-accent"
                   >
                     <div className="min-w-0">
-                      <p className="truncate font-mono text-sm font-medium">{t.target}</p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="flex items-center gap-2 truncate text-sm">
+                        <span className="text-phosphor-dim group-hover:text-phosphor-bright">▸</span>
+                        <span className="text-phosphor">{t.target}</span>
+                      </p>
+                      <p className="pl-5 text-xs text-phosphor-dim/70">
                         {t.total_scans} scan{t.total_scans === 1 ? "" : "s"} · last {timeAgo(t.last_scanned)}
                       </p>
                     </div>
                     <div className="flex items-center gap-3">
                       <RiskBadge label={t.last_risk_label} score={t.last_risk_score} />
-                      <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                      <span className="text-phosphor-dim transition-transform group-hover:translate-x-0.5 group-hover:text-phosphor">
+                        →
+                      </span>
                     </div>
                   </Link>
                 </li>

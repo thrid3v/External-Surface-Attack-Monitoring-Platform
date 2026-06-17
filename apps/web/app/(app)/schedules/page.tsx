@@ -1,13 +1,15 @@
 "use client"
 
 import * as React from "react"
-import { CalendarClock, Trash2, Plus } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { CalendarClock, Trash2, Plus, Play } from "lucide-react"
 
 import {
   listSchedules,
   createSchedule,
   toggleSchedule,
   deleteSchedule,
+  runScheduleNow,
 } from "@/lib/api"
 import type { Schedule } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,7 +30,9 @@ const INTERVALS = [
 ]
 
 export default function SchedulesPage() {
+  const router = useRouter()
   const [schedules, setSchedules] = React.useState<Schedule[]>([])
+  const [running, setRunning] = React.useState<string | null>(null)
   const [target, setTarget] = React.useState("")
   const [profile, setProfile] = React.useState("top-1000")
   const [interval, setInterval] = React.useState(1440)
@@ -62,8 +66,8 @@ export default function SchedulesPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <p className="text-xs font-medium uppercase tracking-[0.3em] text-primary">Automation</p>
-        <h1 className="font-heading text-2xl font-semibold">Recurring scans</h1>
+        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">// schedules</h1>
+        <p className="mt-1 text-xs text-phosphor-dim">recurring scans — cron-driven recon</p>
       </div>
 
       <Card>
@@ -89,7 +93,7 @@ export default function SchedulesPage() {
                 key={p.id}
                 onClick={() => setProfile(p.id)}
                 className={cn(
-                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  "border px-3 py-1 text-xs font-medium transition-colors",
                   profile === p.id ? "border-primary/40 bg-primary/15 text-primary" : "border-border text-muted-foreground"
                 )}
               >
@@ -102,7 +106,7 @@ export default function SchedulesPage() {
                 key={i.v}
                 onClick={() => setInterval(i.v)}
                 className={cn(
-                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  "border px-3 py-1 text-xs font-medium transition-colors",
                   interval === i.v ? "border-primary/40 bg-primary/15 text-primary" : "border-border text-muted-foreground"
                 )}
               >
@@ -136,10 +140,26 @@ export default function SchedulesPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={async () => {
+                        setRunning(s.id)
+                        try {
+                          const { scan_id } = await runScheduleNow(s.id)
+                          router.push(`/scan/${scan_id}`)
+                        } catch {
+                          setRunning(null)
+                        }
+                      }}
+                      disabled={running === s.id}
+                      className="flex items-center gap-1.5 border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+                    >
+                      <Play className="h-3 w-3" />
+                      {running === s.id ? "Running…" : "Run now"}
+                    </button>
+                    <button
                       onClick={() => toggleSchedule(s.id).then(refresh)}
                       className={cn(
-                        "rounded-full border px-3 py-1 text-xs font-medium",
-                        s.enabled ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400" : "border-border text-muted-foreground"
+                        "border px-3 py-1 text-xs font-medium",
+                        s.enabled ? "border-phosphor/50 bg-phosphor/10 text-phosphor" : "border-border text-muted-foreground"
                       )}
                     >
                       {s.enabled ? "Enabled" : "Paused"}

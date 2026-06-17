@@ -24,6 +24,7 @@ for path in (str(API_ROOT), str(PACKAGES_ROOT)):
 
 from constants import MODULE_ORDER
 from db.models import Alert, Scan, Schedule, SessionLocal
+from services import notifications
 from services.diff import diff_reports
 from scanner_core.cve_lookup import lookup_cves
 from scanner_core.dns_enum import run_dns_enum
@@ -70,15 +71,32 @@ celery_app.conf.beat_schedule = {
     "enqueue-due-scans": {
         "task": "enqueue_due_scans",
         "schedule": 300.0,
-    }
+    },
+    "reap-stuck-scans": {
+        "task": "reap_stuck_scans",
+        "schedule": 300.0,
+    },
 }
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+REAP_BUFFER_SECONDS = 120
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalise a possibly-naive datetime to aware UTC.
+
+    Postgres (timezone=True) returns aware datetimes; SQLite (used in tests)
+    returns naive ones. Normalising lets the reaper compare safely on both.
+    """
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def _format_datetime(value: datetime | None) -> str | None:
@@ -113,6 +131,31 @@ def _maybe_fail_on_timeout(db: Session, scan: Scan, start_time: float) -> bool:
         logger.error("scan_worker: scan=%s timed out after %s seconds", scan.id, elapsed)
         return True
     return False
+
+
+def _check_canceled(db: Session, scan: Scan) -> bool:
+    """Return True if the scan has been canceled out-of-band, finalising it.
+
+    The cancel endpoint sets ``status='canceled'`` in a separate process; the
+    worker re-reads the row at module boundaries and stops cooperatively.
+    """
+    db.refresh(scan)
+    if scan.status == "canceled":
+        scan.completed_at = _now()
+        scan.current_module = None
+        _commit_scan(db, scan)
+        logger.info("scan_worker: scan=%s canceled cooperatively", scan.id)
+        return True
+    return False
+
+
+def _aborted(db: Session, scan: Scan, start_time: float) -> str | None:
+    """Combined module-boundary guard: returns 'failed', 'canceled', or None."""
+    if _maybe_fail_on_timeout(db, scan, start_time):
+        return "failed"
+    if _check_canceled(db, scan):
+        return "canceled"
+    return None
 
 
 def _create_change_alerts(db: Session, scan: Scan, report) -> None:
@@ -173,6 +216,13 @@ def _create_change_alerts(db: Session, scan: Scan, report) -> None:
     if alerts:
         db.commit()
         logger.info("scan_worker: scan=%s generated %d alert(s)", scan.id, len(alerts))
+        # Deliver out-of-band on a separate task so slow SMTP/webhook I/O never
+        # blocks scan completion and each delivery can retry independently.
+        for alert in alerts:
+            try:
+                deliver_alert.delay(alert.id)
+            except Exception:
+                logger.exception("scan_worker: failed to enqueue delivery for alert=%s", alert.id)
 
 
 @celery_app.task(
@@ -229,8 +279,9 @@ def run_scan(
                 errors["port_scanner"] = str(exc)
                 ports = []
 
-        if _maybe_fail_on_timeout(db, scan, start_time):
-            return {"status": "failed"}
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
 
         if "cve_lookup" in allowed_modules:
             _set_module_running(db, scan, "cve_lookup")
@@ -243,8 +294,9 @@ def run_scan(
             except Exception as exc:
                 errors["cve_lookup"] = str(exc)
 
-        if _maybe_fail_on_timeout(db, scan, start_time):
-            return {"status": "failed"}
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
 
         if "dns_enum" in allowed_modules:
             _set_module_running(db, scan, "dns_enum")
@@ -267,8 +319,9 @@ def run_scan(
                 zone_transfer_vulnerable = False
                 zone_transfer_records = []
 
-        if _maybe_fail_on_timeout(db, scan, start_time):
-            return {"status": "failed"}
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
 
         if "osint_fetcher" in allowed_modules:
             _set_module_running(db, scan, "osint_fetcher")
@@ -280,8 +333,9 @@ def run_scan(
                 errors["osint_fetcher"] = str(exc)
                 osint = None
 
-        if _maybe_fail_on_timeout(db, scan, start_time):
-            return {"status": "failed"}
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
 
         if "service_probe" in allowed_modules:
             _set_module_running(db, scan, "service_probe")
@@ -294,8 +348,9 @@ def run_scan(
                 errors["service_probe"] = str(exc)
                 http_findings = []
 
-        if _maybe_fail_on_timeout(db, scan, start_time):
-            return {"status": "failed"}
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
 
         if "web_audit" in allowed_modules:
             _set_module_running(db, scan, "web_audit")
@@ -306,8 +361,9 @@ def run_scan(
             except Exception as exc:
                 errors["web_audit"] = str(exc)
 
-        if _maybe_fail_on_timeout(db, scan, start_time):
-            return {"status": "failed"}
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
 
         if "takeover_check" in allowed_modules:
             _set_module_running(db, scan, "takeover_check")
@@ -321,8 +377,9 @@ def run_scan(
             except Exception as exc:
                 errors["takeover_check"] = str(exc)
 
-        if _maybe_fail_on_timeout(db, scan, start_time):
-            return {"status": "failed"}
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
 
         if "email_audit" in allowed_modules:
             _set_module_running(db, scan, "email_audit")
@@ -332,8 +389,9 @@ def run_scan(
             except Exception as exc:
                 errors["email_audit"] = str(exc)
 
-        if _maybe_fail_on_timeout(db, scan, start_time):
-            return {"status": "failed"}
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
 
         if "nuclei_scan" in allowed_modules:
             _set_module_running(db, scan, "nuclei_scan")
@@ -344,8 +402,9 @@ def run_scan(
             except Exception as exc:
                 errors["nuclei_scan"] = str(exc)
 
-        if _maybe_fail_on_timeout(db, scan, start_time):
-            return {"status": "failed"}
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
 
         report = generate_report(
             scan_id=scan_id,
@@ -390,6 +449,59 @@ def run_scan(
         db.close()
 
 
+def _reap_stuck_scans(db: Session, now: datetime | None = None, timeout_seconds: int | None = None) -> int:
+    """Mark scans stuck in pending/running past the time limit as failed.
+
+    Age is measured from ``started_at`` for running scans and ``created_at`` for
+    pending ones (running scans always have ``started_at`` set; pending ones fall
+    back to ``created_at``). Returns the number of scans reaped.
+    """
+    now = now or _now()
+    limit = (timeout_seconds if timeout_seconds is not None else SCAN_TIMEOUT_SECONDS) + REAP_BUFFER_SECONDS
+    cutoff = now - timedelta(seconds=limit)
+
+    stuck = db.query(Scan).filter(Scan.status.in_(("pending", "running"))).all()
+    reaped = 0
+    for scan in stuck:
+        reference = _as_utc(scan.started_at or scan.created_at)
+        if reference is None or reference > cutoff:
+            continue
+        scan.status = "failed"
+        scan.error_message = "Reaped: exceeded time limit (worker may have stopped)"
+        scan.completed_at = now
+        scan.current_module = None
+        reaped += 1
+    if reaped:
+        db.commit()
+        logger.info("scan_worker: reaped %d stuck scan(s)", reaped)
+    return reaped
+
+
+@celery_app.task(name="reap_stuck_scans")
+def reap_stuck_scans() -> dict[str, int]:
+    """Beat-driven recovery: fail scans that a dead worker left in pending/running."""
+    db = SessionLocal()
+    try:
+        return {"reaped": _reap_stuck_scans(db)}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="deliver_alert", bind=True, max_retries=2, default_retry_delay=30)
+def deliver_alert(self, alert_id: str) -> dict[str, bool]:
+    """Deliver a single alert out-of-band via the user's configured channels."""
+    db = SessionLocal()
+    try:
+        alert = db.query(Alert).filter(Alert.id == alert_id).first()
+        if alert is None:
+            logger.warning("scan_worker: deliver_alert: alert not found: %s", alert_id)
+            return {"delivered": False}
+        notifications.deliver_alert(db, alert)
+        return {"delivered": True}
+    finally:
+        db.close()
+
+
 @celery_app.task(name="enqueue_due_scans")
 def enqueue_due_scans() -> dict[str, int]:
     """Beat-driven dispatcher: enqueue a scan for every recurring schedule whose
@@ -419,7 +531,10 @@ def enqueue_due_scans() -> dict[str, int]:
             schedule.last_run_at = now
             schedule.next_run_at = now + timedelta(minutes=schedule.interval_minutes)
             db.commit()
-            run_scan.delay(scan_id, schedule.target, port_range, modules)
+            run_scan.apply_async(
+                args=[scan_id, schedule.target, port_range, modules],
+                task_id=scan_id,
+            )
             queued += 1
             logger.info("scan_worker: enqueued scheduled scan=%s target=%s", scan_id, schedule.target)
         return {"queued": queued}

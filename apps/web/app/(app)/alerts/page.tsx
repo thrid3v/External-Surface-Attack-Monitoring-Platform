@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import { Bell, Check, CheckCheck } from "lucide-react"
 
 import { listAlerts, markAlertRead, markAllAlertsRead } from "@/lib/api"
 import type { Alert } from "@/lib/types"
@@ -27,61 +26,60 @@ export default function AlertsPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <div className="flex items-end justify-between">
+      <header className="flex items-end justify-between gap-4 border-b border-border pb-3">
         <div>
-          <p className="text-xs font-medium uppercase tracking-[0.3em] text-primary">Monitoring</p>
-          <h1 className="font-heading text-2xl font-semibold">
-            Alerts {unread > 0 ? <span className="text-orange-400">({unread})</span> : null}
+          <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">
+            // alerts {unread > 0 ? <span className="text-amber">[{unread}]</span> : null}
           </h1>
+          <p className="mt-1 text-xs text-phosphor-dim">change detection — new risk on re-scan</p>
         </div>
         {unread > 0 ? (
           <Button variant="ghost" size="sm" onClick={() => markAllAlertsRead().then(refresh)}>
-            <CheckCheck className="mr-1.5 h-4 w-4" />
-            Mark all read
+            mark all read
           </Button>
         ) : null}
-      </div>
+      </header>
 
       {loading ? (
         <Card>
-          <CardContent className="py-12 text-center text-sm text-muted-foreground">Loading…</CardContent>
+          <CardContent className="py-12 text-center text-sm text-phosphor-dim">
+            <span className="blink">loading…</span>
+          </CardContent>
         </Card>
       ) : alerts.length === 0 ? (
         <Card>
-          <CardContent className="grid place-items-center gap-2 py-12 text-center">
-            <Bell className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">No alerts. Recurring scans flag new risk here.</p>
+          <CardContent className="py-12 text-center text-sm text-phosphor-dim">
+            no alerts. recurring scans flag new risk here.
           </CardContent>
         </Card>
       ) : (
         <Card>
           <CardContent className="p-0">
-            <ul className="divide-y divide-border">
+            <ul>
               {alerts.map((a) => (
                 <li
                   key={a.id}
                   className={cn(
-                    "flex items-center gap-3 px-5 py-4",
-                    !a.read && "bg-primary/[0.04]"
+                    "flex items-center gap-3 border-b border-border/50 border-l-2 px-4 py-3 last:border-b-0",
+                    a.read ? "border-l-transparent" : "border-l-amber bg-accent/40"
                   )}
                 >
-                  <span className={cn("h-2 w-2 shrink-0 rounded-full", severityColor(a.severity).dot)} />
+                  <span className={cn("h-2 w-2 shrink-0", severityColor(a.severity).dot)} />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm">{a.message}</p>
-                    <p className="text-xs text-muted-foreground">
-                      <span className="font-mono">{a.target}</span> · {timeAgo(a.created_at)}
+                    <p className="text-sm text-phosphor">{a.message}</p>
+                    <p className="text-xs text-phosphor-dim/70">
+                      <span className="text-cyan">{a.target}</span> · {timeAgo(a.created_at)}
                     </p>
                   </div>
                   {!a.read ? (
                     <button
                       onClick={() => markAlertRead(a.id).then(refresh)}
-                      className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                      aria-label="Mark read"
+                      className="border border-border px-2 py-0.5 text-xs text-phosphor-dim transition-colors hover:border-phosphor/50 hover:text-phosphor"
                     >
-                      <Check className="h-4 w-4" />
+                      ack
                     </button>
                   ) : (
-                    <span className="text-xs text-muted-foreground">read</span>
+                    <span className="text-xs text-phosphor-dim/50">read</span>
                   )}
                 </li>
               ))}

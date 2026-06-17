@@ -147,6 +147,7 @@ cp .env.example apps/api/.env
 | `SHODAN_API_KEY`      | ⬜       | Optional — enables Shodan enrichment                             |
 | `NVD_API_KEY`         | ⬜       | Optional — raises NVD rate limit (5→50 req / 30s)                |
 | `SCAN_TIMEOUT`        | ⬜       | Per-scan wall-clock budget in seconds (default 300)             |
+| `SMTP_HOST` … `SMTP_FROM` | ⬜   | Email-alert transport. Blank `SMTP_HOST` disables email (webhooks still work). Per-user routing lives in **Settings → Notifications** |
 
 ### 4. Backend install + migrations
 
@@ -170,9 +171,15 @@ uvicorn main:app --reload --port 8000
 celery -A workers.scan_worker worker --loglevel=info -P solo
 #   Linux/macOS: celery -A workers.scan_worker worker --loglevel=info
 
-# Terminal C — Celery beat (only needed for recurring/scheduled scans)
+# Terminal C — Celery beat (drives recurring scans + the stuck-scan reaper)
+#   Windows: run beat as its own process (the worker's -B flag is unsupported there)
 celery -A workers.scan_worker beat --loglevel=info
 ```
+
+> Out-of-band alert delivery (email + webhook) is configured per user in the web
+> UI under **Settings → Notifications**. A change-detection alert fans out to the
+> user's enabled channels whenever a re-scan surfaces new high/critical findings
+> or a higher risk score.
 
 ### 6. Frontend config
 

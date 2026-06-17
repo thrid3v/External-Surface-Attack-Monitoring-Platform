@@ -43,23 +43,11 @@ function severityBadgeVariant(severity: Severity) {
 }
 
 function scoreCircleClass(cvssScore: number | null) {
-  if (cvssScore === null) {
-    return "bg-slate-200 text-slate-900"
-  }
-
-  if (cvssScore >= 9) {
-    return "bg-destructive/20 text-destructive"
-  }
-
-  if (cvssScore >= 7) {
-    return "bg-orange-200 text-orange-900"
-  }
-
-  if (cvssScore >= 4) {
-    return "bg-amber-200 text-amber-950"
-  }
-
-  return "bg-slate-200 text-slate-900"
+  if (cvssScore === null) return "border border-border text-phosphor-dim"
+  if (cvssScore >= 9) return "border border-red/50 text-red"
+  if (cvssScore >= 7) return "border border-amber/50 text-amber"
+  if (cvssScore >= 4) return "border border-yellow/50 text-yellow"
+  return "border border-cyan/50 text-cyan"
 }
 
 function severityLabel(severity: Severity) {
@@ -100,12 +88,12 @@ export function CVEList({ cves, topFindings }: CVEListProps) {
     return (
       <Card className="rounded-3xl border border-border bg-card">
         <CardContent className="space-y-4 px-6 py-10 text-center">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center border border-phosphor/40 bg-phosphor/5 text-phosphor">
             <CheckCircle className="h-8 w-8" />
           </div>
           <div className="space-y-2">
-            <p className="text-lg font-semibold">No vulnerabilities found — this target looks clean.</p>
-            <p className="text-sm text-muted-foreground">No CVEs were reported for this scan.</p>
+            <p className="font-display text-2xl text-phosphor-bright glow">no vulnerabilities found</p>
+            <p className="text-sm text-phosphor-dim">no cves reported for this scan.</p>
           </div>
         </CardContent>
       </Card>

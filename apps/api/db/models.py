@@ -128,3 +128,34 @@ class Alert(Base):
 
     def __repr__(self) -> str:
         return f"<Alert id={self.id} target={self.target} type={self.type}>"
+
+
+class NotificationSettings(Base):
+    """Per-user out-of-band alert delivery preferences.
+
+    SMTP transport credentials live server-side in the environment; this row
+    only holds the per-user routing (which channels, where, and the minimum
+    severity worth delivering).
+    """
+
+    __tablename__ = "notification_settings"
+
+    id = Column(String(36), primary_key=True, nullable=False)
+    owner_email = Column(String(320), nullable=False, unique=True, index=True)
+    email_enabled = Column(Boolean, nullable=False, default=False)
+    # Recipient override; when NULL, alerts are emailed to owner_email.
+    email_address = Column(String(320), nullable=True)
+    webhook_enabled = Column(Boolean, nullable=False, default=False)
+    webhook_url = Column(String(1024), nullable=True)
+    # Minimum severity that triggers delivery: info < warning < high < critical.
+    min_severity = Column(String(20), nullable=False, default="warning")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<NotificationSettings owner={self.owner_email}>"

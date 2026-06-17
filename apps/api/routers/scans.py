@@ -131,7 +131,11 @@ def create_scan(
     )
     db.add(scan)
     db.commit()
-    run_scan.delay(scan_id, target, port_range, payload.modules or list(MODULE_ORDER))
+    # task_id == scan_id so the cancel endpoint can revoke deterministically.
+    run_scan.apply_async(
+        args=[scan_id, target, port_range, payload.modules or list(MODULE_ORDER)],
+        task_id=scan_id,
+    )
 
     return ScanQueuedResponse(
         scan_id=scan_id,
@@ -247,6 +251,38 @@ def list_scans(
         )
         for scan in scans
     ]
+
+
+@router.post("/{scan_id}/cancel")
+def cancel_scan(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> dict[str, bool]:
+    """Cancel an in-flight scan.
+
+    Sets the cooperative ``canceled`` flag (the worker stops at the next module
+    boundary) and best-effort revokes the Celery task (task_id == scan_id) to
+    stop it sooner / prevent a still-queued task from starting.
+    """
+    scan = db.query(Scan).filter(Scan.id == scan_id, Scan.owner_email == user).first()
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if scan.status not in {"pending", "running"}:
+        raise HTTPException(status_code=409, detail="Scan is not running")
+
+    scan.status = "canceled"
+    scan.completed_at = datetime.now(timezone.utc)
+    scan.current_module = None
+    db.commit()
+
+    try:
+        run_scan.AsyncResult(scan_id).revoke(terminate=True)
+    except Exception:
+        # Best-effort: the cooperative flag above still stops the scan.
+        pass
+
+    return {"canceled": True}
 
 
 @router.delete("/{scan_id}")

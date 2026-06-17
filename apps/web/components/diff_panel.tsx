@@ -21,7 +21,7 @@ export function DiffPanel({ diff }: { diff: DiffResult }) {
 
   const delta = diff.risk_delta ?? 0
   const DeltaIcon = delta > 0 ? TrendingUp : delta < 0 ? TrendingDown : Minus
-  const deltaColor = delta > 0 ? "text-red-400" : delta < 0 ? "text-emerald-400" : "text-muted-foreground"
+  const deltaColor = delta > 0 ? "text-red" : delta < 0 ? "text-phosphor" : "text-muted-foreground"
 
   const noChange =
     !diff.new_cves.length &&
@@ -67,7 +67,7 @@ function DiffList({
   tone: "good" | "bad"
   items: { key: string; label: string; sev?: string }[]
 }) {
-  const toneColor = tone === "bad" ? "text-red-400" : "text-emerald-400"
+  const toneColor = tone === "bad" ? "text-red" : "text-phosphor"
   return (
     <div>
       <p className={cn("mb-2 text-xs font-semibold uppercase tracking-wider", toneColor)}>

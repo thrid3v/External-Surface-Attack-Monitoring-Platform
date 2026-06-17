@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,10 +9,11 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from auth import get_current_user
-from constants import PORT_PROFILES
-from db.models import Schedule
+from constants import MODULE_ORDER, PORT_PROFILES
+from db.models import Scan, Schedule
 from deps import get_db
 from utils import format_datetime
+from workers.scan_worker import run_scan
 
 router = APIRouter()
 
@@ -112,6 +113,36 @@ def toggle_schedule(
     db.commit()
     db.refresh(schedule)
     return _serialize(schedule)
+
+
+@router.post("/{schedule_id}/run")
+def run_schedule_now(
+    schedule_id: str,
+    db: Session = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> dict[str, str]:
+    """Trigger a schedule immediately, reusing its stored scan configuration."""
+    schedule = _owned(db, schedule_id, user)
+    now = datetime.now(timezone.utc)
+    scan_id = str(uuid.uuid4())
+    port_range = schedule.port_range or "1-1000"
+    modules = schedule.modules_list or list(MODULE_ORDER)
+
+    scan = Scan(
+        id=scan_id,
+        owner_email=user,
+        target=schedule.target,
+        status="pending",
+        port_range=port_range,
+        created_at=now,
+    )
+    db.add(scan)
+    schedule.last_run_at = now
+    schedule.next_run_at = now + timedelta(minutes=schedule.interval_minutes)
+    db.commit()
+
+    run_scan.apply_async(args=[scan_id, schedule.target, port_range, modules], task_id=scan_id)
+    return {"scan_id": scan_id, "status": "pending"}
 
 
 @router.delete("/{schedule_id}")

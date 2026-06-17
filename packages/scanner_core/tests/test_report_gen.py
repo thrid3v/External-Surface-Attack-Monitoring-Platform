@@ -78,6 +78,48 @@ def test_generate_report_never_raises():
     assert report is not None
     assert report.target == "example.com"
 
+def test_port_scanner_error_yields_unknown_risk():
+    """A scan whose foundational port_scanner module errored must not present a
+    confident MINIMAL — the attack surface is unknown."""
+    report = generate_report(
+        scan_id=str(uuid.uuid4()),
+        target="example.com",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        ports=[],
+        errors={"port_scanner": "nmap host-timeout reached; results unreliable"},
+    )
+    assert report.risk_label == "UNKNOWN"
+    assert report.risk_score is None
+
+
+def test_clean_host_without_errors_stays_minimal():
+    """0 ports with NO module errors is a legitimately clean host — still MINIMAL."""
+    report = generate_report(
+        scan_id=str(uuid.uuid4()),
+        target="example.com",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        ports=[],
+        errors={},
+    )
+    assert report.risk_label == "MINIMAL"
+    assert report.risk_score == 0
+
+
+def test_non_foundational_module_error_still_scores():
+    """An error in a non-foundational module (e.g. nuclei) keeps a real score —
+    the port/CVE/header signals are still meaningful."""
+    from scanner_core.models import PortResult
+    report = generate_report(
+        scan_id=str(uuid.uuid4()),
+        target="example.com",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        ports=[PortResult(port=80, protocol="tcp", state="open")],
+        errors={"nuclei_scan": "nuclei binary not found"},
+    )
+    assert report.risk_label != "UNKNOWN"
+    assert isinstance(report.risk_score, int)
+
+
 def test_generate_report_full_run(
     mock_port_open, mock_cve_critical, mock_osint, mock_http_finding
 ):

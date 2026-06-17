@@ -80,8 +80,14 @@ Frontend uses `NEXT_PUBLIC_API_URL` (defaults to same origin if unset).
 Scans are triggered via `POST /api/scans`, which persists a `Scan` record and enqueues a Celery task. The worker in `apps/api/workers/scan_worker.py` runs modules sequentially per `MODULE_ORDER` in `apps/api/constants.py`:
 
 ```python
-MODULE_ORDER = ["port_scanner", "cve_lookup", "dns_enum", "osint_fetcher", "service_probe"]
+MODULE_ORDER = ["port_scanner", "cve_lookup", "dns_enum", "osint_fetcher",
+                "service_probe", "web_audit", "takeover_check", "email_audit", "nuclei_scan"]
 ```
+
+Recurring scans and a stuck-scan reaper run on Celery **beat** (`enqueue_due_scans`,
+`reap_stuck_scans`). Change-detection alerts are delivered out-of-band by the
+`deliver_alert` task to each user's enabled channels (email/webhook), configured
+per user via `routers/settings.py` (`notification_settings` table).
 
 Each module is imported from `packages/scanner_core/` and returns Pydantic models defined in `packages/scanner_core/models.py`. Results are serialized to `result_json` (Text column) on the `Scan` DB record. `current_module` and `status` are updated live so the frontend can poll progress.
 
@@ -95,7 +101,9 @@ Each module is imported from `packages/scanner_core/` and returns Pydantic model
 ### Backend API
 
 - `apps/api/main.py` — FastAPI app, CORS setup, router registration
-- `apps/api/routers/scans.py` — scan CRUD + status endpoint
+- `apps/api/auth.py` — BFF auth: the API is fail-closed behind `X-Internal-Secret` + `X-User-Email` (the Next.js server injects these); `get_current_user` returns the acting email for ownership scoping
+- `apps/api/routers/scans.py` — scan CRUD, status, diff, **cancel** (`POST /{id}/cancel`, cooperative)
+- `apps/api/routers/{targets,schedules,alerts,settings}.py` — target aggregation/history, recurring schedules (+ `POST /{id}/run`), change-detection alerts, and per-user notification settings (+ `POST /notifications/test`)
 - `apps/api/db/models.py` — SQLAlchemy `Scan` model; `.result` property auto-parses `result_json`
 - `apps/api/deps.py` — DB session dependency injection
 - Database is auto-created on startup via `Base.metadata.create_all()` if `DATABASE_URL` is set; Alembic handles schema migrations
@@ -107,6 +115,6 @@ Each module is imported from `packages/scanner_core/` and returns Pydantic model
 ## Key Constraints
 
 - **Scan authorization**: The API requires `i_own_this_target: true` in the scan request body — this is a legal acknowledgment that the requester owns the target.
-- **Windows Celery**: Must use `-P solo` pool on Windows (no fork support).
+- **Windows Celery**: Must use `-P solo` pool on Windows (no fork support). Run **beat as a separate process** (`celery -A workers.scan_worker beat`) — the worker's embedded `-B` flag is unsupported on Windows.
 - **Next.js version note**: `apps/web/AGENTS.md` documents breaking changes between Next.js versions — read it before modifying the frontend routing or data-fetching patterns.
 - **DB initialization**: `apps/api/main.py` wraps `create_all()` in a try/except so the app starts without a DB (useful for running Alembic standalone). Don't remove that guard.
