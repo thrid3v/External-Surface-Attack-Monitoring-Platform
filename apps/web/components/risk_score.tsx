@@ -1,22 +1,16 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
-
-const SEVERITY_COLORS: Record<string, { text: string; bg: string; border: string }> = {
-  CRITICAL: { text: "text-red-500",    bg: "bg-red-50 dark:bg-red-950",      border: "border-l-red-500" },
-  HIGH:     { text: "text-orange-500", bg: "bg-orange-50 dark:bg-orange-950", border: "border-l-orange-500" },
-  MEDIUM:   { text: "text-yellow-500", bg: "bg-yellow-50 dark:bg-yellow-950", border: "border-l-yellow-500" },
-  LOW:      { text: "text-blue-500",   bg: "bg-blue-50 dark:bg-blue-950",     border: "border-l-blue-500" },
-  MINIMAL:  { text: "text-gray-500",   bg: "bg-gray-50 dark:bg-gray-900",     border: "border-l-gray-400" },
-}
+import { RiskBadge } from "@/components/risk-badge"
+import { severityColor } from "@/lib/severity"
+import { cn } from "@/lib/utils"
 
 const STAT_ROWS = [
-  { key: "critical", label: "CRITICAL", colorKey: "CRITICAL" },
-  { key: "high",     label: "HIGH",     colorKey: "HIGH" },
-  { key: "medium",   label: "MEDIUM",   colorKey: "MEDIUM" },
-  { key: "low",      label: "LOW",      colorKey: "LOW" },
+  { key: "critical", label: "crit", sev: "CRITICAL" },
+  { key: "high", label: "high", sev: "HIGH" },
+  { key: "medium", label: "med", sev: "MEDIUM" },
+  { key: "low", label: "low", sev: "LOW" },
 ]
 
 interface RiskScoreProps {
@@ -30,7 +24,10 @@ export default function RiskScore({ score, label, severitySummary, target }: Ris
   const [displayScore, setDisplayScore] = useState(0)
 
   useEffect(() => {
-    if (score === 0) return
+    if (score === 0) {
+      setDisplayScore(0)
+      return
+    }
     let current = 0
     const step = Math.max(1, Math.ceil(score / 40))
     const timer = setInterval(() => {
@@ -41,33 +38,35 @@ export default function RiskScore({ score, label, severitySummary, target }: Ris
     return () => clearInterval(timer)
   }, [score])
 
-  const colors = SEVERITY_COLORS[label] ?? SEVERITY_COLORS.MINIMAL
+  const c = severityColor(label)
 
   return (
-    <Card className={`rounded-3xl border-l-4 ${colors.border}`}>
-      <CardContent className="pt-6">
-        <div className="grid gap-6 sm:grid-cols-[auto_1fr]">
-          <div className="space-y-2">
-            <p className={`text-8xl font-bold tabular-nums leading-none ${colors.text}`}>
-              {displayScore}
-            </p>
-            <Badge className={`${colors.text} ${colors.bg} border-0 text-xs font-semibold`}>
-              {label}
-            </Badge>
-            <p className="font-mono text-sm text-muted-foreground">{target}</p>
+    <Card className={cn("border-l-2", c.border)}>
+      <CardContent className="grid gap-6 pt-2 sm:grid-cols-[auto_1fr]">
+        <div>
+          <p className="text-xs text-phosphor-dim">// risk_score</p>
+          <p className={cn("font-display text-7xl leading-none tabular-nums glow-strong", c.text)}>
+            {String(displayScore).padStart(2, "0")}
+            <span className="text-2xl text-phosphor-dim">/100</span>
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <RiskBadge label={label} />
+            <span className="text-sm text-cyan">{target}</span>
           </div>
+        </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {STAT_ROWS.map(({ key, label: sLabel, colorKey }) => {
-              const c = SEVERITY_COLORS[colorKey]
-              return (
-                <div key={key} className={`rounded-2xl p-4 ${c.bg} space-y-1 text-center`}>
-                  <p className={`text-2xl font-bold ${c.text}`}>{severitySummary[key] ?? 0}</p>
-                  <p className="text-xs text-muted-foreground">{sLabel}</p>
-                </div>
-              )
-            })}
-          </div>
+        <div className="grid grid-cols-2 gap-2 self-center sm:grid-cols-4">
+          {STAT_ROWS.map(({ key, label: sLabel, sev }) => {
+            const cc = severityColor(sev)
+            return (
+              <div key={key} className={cn("border p-3 text-center", cc.border)}>
+                <p className={cn("font-display text-3xl leading-none tabular-nums", cc.text)}>
+                  {severitySummary[key] ?? 0}
+                </p>
+                <p className="mt-1 text-[10px] uppercase tracking-[0.2em] text-phosphor-dim">{sLabel}</p>
+              </div>
+            )
+          })}
         </div>
       </CardContent>
     </Card>
