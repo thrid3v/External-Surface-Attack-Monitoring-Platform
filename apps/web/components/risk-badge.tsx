@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils"
 import { severityColor } from "@/lib/severity"
 
+/** Risk/severity rendered as a terminal bracket tag, e.g. [CRITICAL:88]. */
 export function RiskBadge({
   label,
   score,
@@ -14,16 +15,14 @@ export function RiskBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold",
-        c.bg,
-        c.border,
+        "inline-flex items-center border px-1.5 font-mono text-[11px] uppercase tracking-wider",
         c.text,
+        c.border,
         className
       )}
     >
-      <span className={cn("h-1.5 w-1.5 rounded-full", c.dot)} />
       {label ?? "UNKNOWN"}
-      {typeof score === "number" ? <span className="opacity-70">· {score}</span> : null}
+      {typeof score === "number" ? <span className="opacity-70">:{score}</span> : null}
     </span>
   )
 }

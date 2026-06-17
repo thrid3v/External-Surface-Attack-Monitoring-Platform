@@ -116,10 +116,9 @@ export default function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
-        <p className="text-xs font-medium uppercase tracking-[0.3em] text-primary">Account</p>
-        <h1 className="font-heading text-2xl font-semibold">Notifications</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Choose how you&apos;re alerted when a re-scan surfaces new risk on your targets.
+        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">// notifications</h1>
+        <p className="mt-1 text-xs text-phosphor-dim">
+          how you&apos;re alerted when a re-scan surfaces new risk
         </p>
       </div>
 

@@ -66,8 +66,8 @@ export default function SchedulesPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <p className="text-xs font-medium uppercase tracking-[0.3em] text-primary">Automation</p>
-        <h1 className="font-heading text-2xl font-semibold">Recurring scans</h1>
+        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">// schedules</h1>
+        <p className="mt-1 text-xs text-phosphor-dim">recurring scans — cron-driven recon</p>
       </div>
 
       <Card>

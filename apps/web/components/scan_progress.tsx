@@ -1,16 +1,20 @@
 "use client"
 
-import { CheckCircle, Loader2, Minus } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
+import { cn } from "@/lib/utils"
 
+// Mirrors MODULE_ORDER in the backend (apps/api/constants.py).
 const MODULES = [
-  { key: "port_scanner",  label: "Port scan" },
-  { key: "cve_lookup",    label: "CVE lookup" },
-  { key: "dns_enum",      label: "DNS enumeration" },
-  { key: "osint_fetcher", label: "OSINT fetch" },
-  { key: "service_probe", label: "Service probe" },
-  { key: "report_gen",    label: "Generating report" },
+  { key: "port_scanner", label: "port scan" },
+  { key: "cve_lookup", label: "cve lookup" },
+  { key: "dns_enum", label: "dns enumeration" },
+  { key: "osint_fetcher", label: "osint fetch" },
+  { key: "service_probe", label: "service / tls probe" },
+  { key: "web_audit", label: "web exposure audit" },
+  { key: "takeover_check", label: "subdomain takeover" },
+  { key: "email_audit", label: "email posture" },
+  { key: "nuclei_scan", label: "nuclei templates" },
 ]
 
 interface ScanProgressProps {
@@ -20,36 +24,55 @@ interface ScanProgressProps {
 
 export default function ScanProgress({ currentModule, target }: ScanProgressProps) {
   const currentIndex = currentModule ? MODULES.findIndex((m) => m.key === currentModule) : -1
-  const percentage = currentIndex >= 0 ? ((currentIndex + 1) / MODULES.length) * 100 : 0
+  const completed = currentIndex >= 0 ? currentIndex : 0
+  const percentage = Math.round((completed / MODULES.length) * 100)
 
   return (
-    <Card className="rounded-3xl border border-border">
-      <CardContent className="space-y-6 pt-6">
-        <div>
-          <h2 className="text-xl font-semibold">Scanning {target}…</h2>
-          <p className="mt-1 text-sm text-muted-foreground">This usually takes 1–3 minutes. Port scanning may appear paused while nmap runs.</p>
+    <Card>
+      <CardContent className="space-y-4 pt-2">
+        <div className="flex items-baseline gap-2">
+          <span className="text-phosphor-dim">$</span>
+          <span className="text-phosphor">easm scan</span>
+          <span className="text-cyan">{target}</span>
+          <span className="blink text-phosphor-bright">▋</span>
+        </div>
+        <p className="text-xs text-phosphor-dim">
+          running — typically 1–3 min. nmap may appear paused during the port sweep.
+        </p>
+
+        <div className="flex items-center gap-3">
+          <Progress value={percentage} className="h-2 flex-1" />
+          <span className="font-display text-lg tabular-nums text-phosphor">{percentage}%</span>
         </div>
 
-        <Progress value={percentage} className="h-2" />
-
-        <ul className="space-y-3">
+        <ul className="space-y-1 text-sm">
           {MODULES.map((mod, index) => {
             let state: "complete" | "running" | "pending" = "pending"
             if (index < currentIndex) state = "complete"
             else if (mod.key === currentModule) state = "running"
 
+            const marker =
+              state === "complete" ? "[ ok ]" : state === "running" ? "[>>>>]" : "[    ]"
+
             return (
-              <li key={mod.key} className="flex items-center gap-3 text-sm">
-                {state === "complete" && (
-                  <CheckCircle className="h-4 w-4 shrink-0 text-green-500" />
-                )}
-                {state === "running" && (
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
-                )}
-                {state === "pending" && (
-                  <Minus className="h-4 w-4 shrink-0 text-muted-foreground" />
-                )}
-                <span className={state === "pending" ? "text-muted-foreground" : "text-foreground"}>
+              <li key={mod.key} className="flex items-center gap-3">
+                <span
+                  className={cn(
+                    "font-mono",
+                    state === "complete" && "text-phosphor",
+                    state === "running" && "text-phosphor-bright glow blink",
+                    state === "pending" && "text-phosphor-dim/40"
+                  )}
+                >
+                  {marker}
+                </span>
+                <span
+                  className={cn(
+                    state === "complete" && "text-phosphor-dim",
+                    state === "running" && "text-phosphor",
+                    state === "pending" && "text-phosphor-dim/40"
+                  )}
+                >
                   {mod.label}
                 </span>
               </li>

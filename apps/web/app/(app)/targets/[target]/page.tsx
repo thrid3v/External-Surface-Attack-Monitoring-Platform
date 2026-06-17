@@ -56,8 +56,8 @@ export default function TargetDetailPage({ params }: { params: Promise<{ target:
 
       <div className="flex items-end justify-between gap-3">
         <div>
-          <p className="text-xs font-medium uppercase tracking-[0.3em] text-primary">Target</p>
-          <h1 className="font-heading font-mono text-2xl font-semibold">{decoded}</h1>
+          <p className="text-xs text-phosphor-dim">// target</p>
+          <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">{decoded}</h1>
         </div>
         <Button onClick={onRescan} disabled={rescanning} className="shrink-0">
           <Radar className="mr-1.5 h-4 w-4" />
