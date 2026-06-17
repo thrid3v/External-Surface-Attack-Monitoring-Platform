@@ -45,7 +45,6 @@ shodan==1.31.0
 six==1.17.0
 SQLAlchemy==2.0.50
 starlette==1.2.1
-tldextract==5.3.1
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2026.2
@@ -55,7 +54,6 @@ uvicorn==0.48.0
 vine==5.1.0
 wcwidth==0.7.0
 whois==1.20240129.2
-xlsxwriter==3.2.9
 
 # Test tooling (pytest packages/scanner_core/tests/)
 pytest==9.0.3
