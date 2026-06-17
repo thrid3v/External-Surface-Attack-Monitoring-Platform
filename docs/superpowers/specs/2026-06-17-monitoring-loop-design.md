@@ -83,14 +83,17 @@ Registered in `main.py` alongside the other routers.
 
 ## Feature 2 — Activate scheduling
 
-Run Celery **beat** embedded in the worker via the `-B` flag (simplest for dev and
-the Windows solo pool). Update:
+Run Celery **beat** as a separate process: `celery -A workers.scan_worker beat`.
 
-- `apps/api/` run docs / README and `CLAUDE.md` worker command to
-  `celery -A workers.scan_worker worker --loglevel=info -P solo -B`.
-- The live dev stack (restart the worker with `-B`).
+> **Verified correction:** the original plan was to embed beat via the worker's
+> `-B` flag, but `-B` is **rejected on Windows** ("`-B` option does not work on
+> Windows. Please run celery beat as a separate service."). On Windows beat must
+> be its own process; `-B` embedding is a Linux/macOS-only convenience. Docs and
+> the live stack run beat standalone. (No code change — `beat_schedule` is defined
+> on the Celery app and works either way.)
 
-`enqueue_due_scans` (already implemented) then dispatches due schedules every 5 min.
+`enqueue_due_scans` (already implemented) then dispatches due schedules every 5 min,
+alongside `reap_stuck_scans`.
 
 ---
 
