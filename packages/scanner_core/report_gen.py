@@ -223,7 +223,7 @@ def generate_report(
                 actual_modules_run.append("service_probe")
 
         cves = _collect_all_cves(ports)
-        score = calculate_risk_score(
+        score: Optional[int] = calculate_risk_score(
             cves,
             len(ports),
             http_findings,
@@ -232,6 +232,12 @@ def generate_report(
             findings=findings,
         )
         risk_label = get_risk_label(score)
+        # The port scan is foundational: every downstream signal depends on it.
+        # If it errored, we have no reliable view of the attack surface, so don't
+        # present a confident MINIMAL — mark the risk UNKNOWN.
+        if "port_scanner" in errors:
+            score = None
+            risk_label = "UNKNOWN"
         severity_summary = _build_severity_summary(cves, findings)
         top_findings = _get_top_findings(cves)
         subdomains = _merge_subdomains(subdomains, osint)
