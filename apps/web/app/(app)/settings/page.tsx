@@ -27,9 +27,9 @@ function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+        "border px-3 py-1 text-xs font-medium transition-colors",
         on
-          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+          ? "border-phosphor/50 bg-phosphor/10 text-phosphor"
           : "border-border text-muted-foreground"
       )}
     >
@@ -177,7 +177,7 @@ export default function SettingsPage() {
               type="button"
               onClick={() => setMinSeverity(s.id)}
               className={cn(
-                "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                "border px-3 py-1 text-xs font-medium transition-colors",
                 minSeverity === s.id
                   ? "border-primary/40 bg-primary/15 text-primary"
                   : "border-border text-muted-foreground"
@@ -198,7 +198,7 @@ export default function SettingsPage() {
             ) : (
               (["email", "webhook"] as const).map((ch) =>
                 testResult[ch] ? (
-                  <p key={ch} className={testResult[ch]!.ok ? "text-emerald-400" : "text-destructive"}>
+                  <p key={ch} className={testResult[ch]!.ok ? "text-phosphor" : "text-destructive"}>
                     {testResult[ch]!.ok ? "✓" : "✗"} {ch}
                     {testResult[ch]!.error ? ` — ${testResult[ch]!.error}` : ""}
                   </p>

@@ -12,12 +12,12 @@ export function FindingsPanel({ findings }: { findings: Finding[] }) {
     return (
       <Card>
         <CardContent className="grid place-items-center gap-2 py-12 text-center">
-          <span className="grid h-12 w-12 place-items-center rounded-full bg-emerald-500/15">
-            <ShieldCheck className="h-6 w-6 text-emerald-400" />
+          <span className="grid h-12 w-12 place-items-center border border-phosphor/40 bg-phosphor/5">
+            <ShieldCheck className="h-6 w-6 text-phosphor" />
           </span>
-          <p className="font-medium">No misconfigurations or exposures detected.</p>
-          <p className="text-sm text-muted-foreground">
-            Web exposure, TLS, takeover, email, and template checks found nothing.
+          <p className="font-display text-xl text-phosphor-bright glow">no exposures detected</p>
+          <p className="text-sm text-phosphor-dim">
+            web, tls, takeover, email, and template checks found nothing.
           </p>
         </CardContent>
       </Card>
@@ -38,25 +38,25 @@ export function FindingsPanel({ findings }: { findings: Finding[] }) {
           <Card key={`${f.title}-${i}`} className={cn("border-l-4", c.border)}>
             <CardContent className="space-y-2 pt-6">
               <div className="flex flex-wrap items-center gap-2">
-                <span className={cn("rounded-md px-2 py-0.5 text-xs font-semibold", c.bg, c.text)}>
+                <span className={cn("border px-1.5 text-[11px] uppercase tracking-wider", c.border, c.text)}>
                   {f.severity.toUpperCase()}
                 </span>
-                <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                <span className="border border-border px-1.5 text-[11px] uppercase tracking-wider text-phosphor-dim">
                   {f.category}
                 </span>
-                <span className="font-medium">{f.title}</span>
+                <span className="text-phosphor">{f.title}</span>
               </div>
               {f.target ? <p className="font-mono text-xs text-muted-foreground">{f.target}</p> : null}
               {f.description ? <p className="text-sm text-muted-foreground">{f.description}</p> : null}
               {f.evidence ? (
-                <pre className="overflow-x-auto rounded-lg bg-muted/50 px-3 py-2 text-xs text-foreground/80">
+                <pre className="overflow-x-auto border border-border bg-bg-inset px-3 py-2 text-xs text-phosphor-dim">
                   {f.evidence}
                 </pre>
               ) : null}
               {f.remediation ? (
                 <p className="text-xs">
-                  <span className="font-semibold text-primary">Fix: </span>
-                  <span className="text-muted-foreground">{f.remediation}</span>
+                  <span className="text-amber">fix: </span>
+                  <span className="text-phosphor-dim">{f.remediation}</span>
                 </p>
               ) : null}
               {f.references && f.references.length > 0 ? (
@@ -67,7 +67,7 @@ export function FindingsPanel({ findings }: { findings: Finding[] }) {
                       href={r}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-primary hover:underline"
+                      className="text-xs text-cyan hover:underline"
                     >
                       ref ↗
                     </a>

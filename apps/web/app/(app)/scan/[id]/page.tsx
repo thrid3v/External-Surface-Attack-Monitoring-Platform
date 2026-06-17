@@ -137,7 +137,7 @@ export default function ResultsPage({ params }: PageProps) {
         </Link>
         <Card>
           <CardHeader className="flex-row items-center gap-4">
-            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-muted">
+            <span className="grid h-12 w-12 place-items-center bg-muted">
               <Ban className="h-6 w-6 text-muted-foreground" />
             </span>
             <CardTitle>Scan canceled</CardTitle>
@@ -161,7 +161,7 @@ export default function ResultsPage({ params }: PageProps) {
         </Link>
         <Card className="border-destructive/40 bg-destructive/5">
           <CardHeader className="flex-row items-center gap-4">
-            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-destructive/10">
+            <span className="grid h-12 w-12 place-items-center bg-destructive/10">
               <AlertCircle className="h-6 w-6 text-destructive" />
             </span>
             <CardTitle>Scan failed</CardTitle>
@@ -218,11 +218,11 @@ export default function ResultsPage({ params }: PageProps) {
       </div>
 
       {report.zone_transfer_vulnerable ? (
-        <Card className="border-red-500/40 bg-red-500/5">
+        <Card className="border-red/50 bg-red/5">
           <CardContent className="flex items-start gap-3 pt-6">
-            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-400" />
+            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red" />
             <div>
-              <p className="font-semibold text-red-400">DNS zone transfer exposed</p>
+              <p className="font-semibold text-red">DNS zone transfer exposed</p>
               <p className="text-sm text-muted-foreground">
                 An authoritative name server allowed an AXFR transfer, leaking{" "}
                 {report.zone_transfer_records?.length ?? 0} internal DNS records. This is a high-severity
@@ -245,7 +245,7 @@ export default function ResultsPage({ params }: PageProps) {
       {diff ? <DiffPanel diff={diff} /> : null}
 
       <Tabs defaultValue="vulnerabilities" className="space-y-4">
-        <TabsList className="flex w-full gap-1 rounded-2xl border border-border bg-card p-1.5">
+        <TabsList className="flex w-full gap-1 border border-border bg-card p-1.5">
           <TabsTrigger value="vulnerabilities" className="flex-1">
             Vulnerabilities
           </TabsTrigger>

@@ -129,8 +129,8 @@ export default function OSINTPanel({ osint, dnsRecords, subdomains }: OSINTPanel
                   <dd className="mt-0.5 flex items-center gap-2 text-sm font-medium">
                     {value || "—"}
                     {expired && (
-                      <Badge className="border-0 bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400">
-                        DOMAIN EXPIRED
+                      <Badge className="border-red/50 text-red">
+                        domain expired
                       </Badge>
                     )}
                   </dd>
@@ -149,17 +149,17 @@ export default function OSINTPanel({ osint, dnsRecords, subdomains }: OSINTPanel
             <div className="flex gap-2 text-xs">
               <span className="flex items-center gap-1">
                 {hasSPF ? (
-                  <CheckCircle className="h-3.5 w-3.5 text-green-500" />
+                  <CheckCircle className="h-3.5 w-3.5 text-phosphor" />
                 ) : (
-                  <XCircle className="h-3.5 w-3.5 text-red-500" />
+                  <XCircle className="h-3.5 w-3.5 text-red" />
                 )}
                 SPF
               </span>
               <span className="flex items-center gap-1">
                 {hasDKIM ? (
-                  <CheckCircle className="h-3.5 w-3.5 text-green-500" />
+                  <CheckCircle className="h-3.5 w-3.5 text-phosphor" />
                 ) : (
-                  <XCircle className="h-3.5 w-3.5 text-red-500" />
+                  <XCircle className="h-3.5 w-3.5 text-red" />
                 )}
                 DKIM
               </span>
@@ -183,7 +183,7 @@ export default function OSINTPanel({ osint, dnsRecords, subdomains }: OSINTPanel
                       (record.value.toLowerCase().includes("spf") ||
                         record.value.toLowerCase().includes("dkim"))
                     return (
-                      <TableRow key={`${type}-${i}`} className={isSecurity ? "bg-green-50/50 dark:bg-green-950/20" : undefined}>
+                      <TableRow key={`${type}-${i}`} className={isSecurity ? "bg-phosphor/5" : undefined}>
                         <TableCell className="pl-6 font-mono text-xs font-semibold text-muted-foreground">
                           {type}
                         </TableCell>
@@ -229,8 +229,8 @@ export default function OSINTPanel({ osint, dnsRecords, subdomains }: OSINTPanel
                           <span className="font-mono text-xs text-muted-foreground">{s.ip_address}</span>
                         )}
                         {s.is_different_ip && (
-                          <Badge className="border-0 bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-400">
-                            Different IP
+                          <Badge className="border-yellow/50 text-yellow">
+                            different ip
                           </Badge>
                         )}
                       </li>
@@ -286,7 +286,7 @@ export default function OSINTPanel({ osint, dnsRecords, subdomains }: OSINTPanel
                   {shodanVulns.length > 0 ? (
                     <span className="flex flex-wrap gap-1">
                       {shodanVulns.map((v) => (
-                        <Badge key={v} className="border-0 bg-red-100 font-mono text-xs text-red-600 dark:bg-red-950 dark:text-red-400">
+                        <Badge key={v} className="border-red/50 font-mono text-red">
                           {v}
                         </Badge>
                       ))}

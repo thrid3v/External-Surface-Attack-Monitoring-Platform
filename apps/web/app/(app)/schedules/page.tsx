@@ -93,7 +93,7 @@ export default function SchedulesPage() {
                 key={p.id}
                 onClick={() => setProfile(p.id)}
                 className={cn(
-                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  "border px-3 py-1 text-xs font-medium transition-colors",
                   profile === p.id ? "border-primary/40 bg-primary/15 text-primary" : "border-border text-muted-foreground"
                 )}
               >
@@ -106,7 +106,7 @@ export default function SchedulesPage() {
                 key={i.v}
                 onClick={() => setInterval(i.v)}
                 className={cn(
-                  "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                  "border px-3 py-1 text-xs font-medium transition-colors",
                   interval === i.v ? "border-primary/40 bg-primary/15 text-primary" : "border-border text-muted-foreground"
                 )}
               >
@@ -150,7 +150,7 @@ export default function SchedulesPage() {
                         }
                       }}
                       disabled={running === s.id}
-                      className="flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+                      className="flex items-center gap-1.5 border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
                     >
                       <Play className="h-3 w-3" />
                       {running === s.id ? "Running…" : "Run now"}
@@ -158,8 +158,8 @@ export default function SchedulesPage() {
                     <button
                       onClick={() => toggleSchedule(s.id).then(refresh)}
                       className={cn(
-                        "rounded-full border px-3 py-1 text-xs font-medium",
-                        s.enabled ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400" : "border-border text-muted-foreground"
+                        "border px-3 py-1 text-xs font-medium",
+                        s.enabled ? "border-phosphor/50 bg-phosphor/10 text-phosphor" : "border-border text-muted-foreground"
                       )}
                     >
                       {s.enabled ? "Enabled" : "Paused"}

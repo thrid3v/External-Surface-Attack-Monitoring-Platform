@@ -76,20 +76,11 @@ function cveCountBadgeProps(severity: Severity) {
     case "CRITICAL":
       return { variant: "destructive" as const }
     case "HIGH":
-      return {
-        variant: "outline" as const,
-        className: "border-orange-200 bg-orange-100 text-orange-900",
-      }
+      return { variant: "outline" as const, className: "border-amber/50 text-amber" }
     case "MEDIUM":
-      return {
-        variant: "outline" as const,
-        className: "border-amber-200 bg-amber-100 text-amber-950",
-      }
+      return { variant: "outline" as const, className: "border-yellow/50 text-yellow" }
     default:
-      return {
-        variant: "outline" as const,
-        className: "border-slate-200 bg-slate-100 text-slate-700",
-      }
+      return { variant: "outline" as const, className: "border-border text-phosphor-dim" }
   }
 }
 
@@ -184,7 +175,7 @@ export default function PortTable({ ports }: { ports: PortResult[] }) {
               </TableRow>
 
               {expanded ? (
-                <TableRow className="bg-slate-50">
+                <TableRow className="bg-bg-inset">
                   <TableCell colSpan={6} className="p-0">
                     <div className="border-t border-border bg-background px-4 py-4">
                       <div className="grid grid-cols-[1.4fr_80px_96px_1fr] gap-3 px-2 pb-3 text-xs uppercase tracking-[0.12em] text-muted-foreground">
@@ -214,8 +205,8 @@ export default function PortTable({ ports }: { ports: PortResult[] }) {
                           ))}
                         </div>
                       ) : (
-                        <div className="rounded-2xl border border-border bg-slate-50 px-4 py-6 text-center text-sm text-muted-foreground">
-                          No CVEs found for this port.
+                        <div className="border border-border bg-bg-inset px-4 py-6 text-center text-sm text-phosphor-dim">
+                          no cves found for this port.
                         </div>
                       )}
                     </div>
