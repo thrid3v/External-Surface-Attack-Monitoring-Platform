@@ -8,6 +8,7 @@ from routers.scans import router as scans_router
 from routers.targets import router as targets_router
 from routers.schedules import router as schedules_router
 from routers.alerts import router as alerts_router
+from routers.settings import router as settings_router
 
 load_dotenv()
 
@@ -32,6 +33,7 @@ app.include_router(scans_router, prefix="/api/scans", tags=["scans"])
 app.include_router(targets_router, prefix="/api/targets", tags=["targets"])
 app.include_router(schedules_router, prefix="/api/schedules", tags=["schedules"])
 app.include_router(alerts_router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 
 
 @app.on_event("startup")

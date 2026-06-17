@@ -24,6 +24,7 @@ for path in (str(API_ROOT), str(PACKAGES_ROOT)):
 
 from constants import MODULE_ORDER
 from db.models import Alert, Scan, Schedule, SessionLocal
+from services import notifications
 from services.diff import diff_reports
 from scanner_core.cve_lookup import lookup_cves
 from scanner_core.dns_enum import run_dns_enum
@@ -173,6 +174,13 @@ def _create_change_alerts(db: Session, scan: Scan, report) -> None:
     if alerts:
         db.commit()
         logger.info("scan_worker: scan=%s generated %d alert(s)", scan.id, len(alerts))
+        # Deliver out-of-band on a separate task so slow SMTP/webhook I/O never
+        # blocks scan completion and each delivery can retry independently.
+        for alert in alerts:
+            try:
+                deliver_alert.delay(alert.id)
+            except Exception:
+                logger.exception("scan_worker: failed to enqueue delivery for alert=%s", alert.id)
 
 
 @celery_app.task(
@@ -386,6 +394,21 @@ def run_scan(
             _commit_scan(db, scan)
         logger.exception("scan_worker: scan=%s failed with exception", scan_id)
         raise
+    finally:
+        db.close()
+
+
+@celery_app.task(name="deliver_alert", bind=True, max_retries=2, default_retry_delay=30)
+def deliver_alert(self, alert_id: str) -> dict[str, bool]:
+    """Deliver a single alert out-of-band via the user's configured channels."""
+    db = SessionLocal()
+    try:
+        alert = db.query(Alert).filter(Alert.id == alert_id).first()
+        if alert is None:
+            logger.warning("scan_worker: deliver_alert: alert not found: %s", alert_id)
+            return {"delivered": False}
+        notifications.deliver_alert(db, alert)
+        return {"delivered": True}
     finally:
         db.close()
 
