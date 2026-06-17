@@ -41,7 +41,7 @@ export function SeverityDonut({ data, label = "total" }: { data: DonutDatum[]; l
           </Pie>
           <Tooltip
             contentStyle={{
-              background: "#0d130d",
+              background: "#0c0c0c",
               border: "1px solid #16361f",
               borderRadius: 0,
               color: "#43d675",

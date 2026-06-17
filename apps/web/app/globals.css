@@ -77,15 +77,15 @@
 
 :root {
   /* --- phosphor palette --- */
-  --bg: #0a0e0a;          /* phosphor glass black */
-  --bg-raised: #0d130d;   /* lifted panels */
-  --bg-inset: #060906;    /* wells / inputs */
+  --bg: #000000;          /* proper black */
+  --bg-raised: #0c0c0c;   /* lifted panels (neutral, no green tint) */
+  --bg-inset: #050505;    /* wells / inputs */
   --phosphor: #43d675;       /* primary readable green */
   --phosphor-bright: #74ffa6; /* cursor / active / highlight */
   --phosphor-dim: #2f9e54;    /* secondary text */
   --phosphor-faint: #16361f;  /* hairline borders / grid */
   --amber: #ffb000;   /* warnings / HIGH */
-  --cyan: #3ad0e0;    /* info / links / LOW */
+  --cyan: #4d9fff;    /* info / links / LOW — blue accent */
   --red: #ff4d5e;     /* danger / CRITICAL */
   --yellow: #e8d44a;  /* MEDIUM */
 
@@ -94,13 +94,13 @@
   --foreground: var(--phosphor);
   --card: var(--bg-raised);
   --card-foreground: var(--phosphor);
-  --popover: #0b110b;
+  --popover: #0a0a0a;
   --popover-foreground: var(--phosphor);
   --primary: var(--phosphor-bright);
   --primary-foreground: #04130a;
   --secondary: #11181100;     /* transparent — terminal has no filled secondary */
   --secondary-foreground: var(--phosphor);
-  --muted: #0e150e;
+  --muted: #0e0e0e;
   --muted-foreground: var(--phosphor-dim);
   --accent: #102916;          /* green-tint hover wash */
   --accent-foreground: var(--phosphor-bright);
@@ -117,7 +117,7 @@
   --chart-5: var(--cyan);
 
   /* sidebar: the recon console pane */
-  --sidebar: #070b07;
+  --sidebar: #050505;
   --sidebar-foreground: var(--phosphor-dim);
   --sidebar-primary: var(--phosphor-bright);
   --sidebar-primary-foreground: #04130a;
@@ -142,8 +142,8 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "calt" 1, "ss01" 1;
-    /* faint phosphor vignette so the black reads like a glass tube, not flat #000 */
-    background-image: radial-gradient(120% 120% at 50% 0%, #0d150d 0%, var(--bg) 55%);
+    /* faint neutral vignette so the black reads like a glass tube, not flat #000 */
+    background-image: radial-gradient(120% 120% at 50% 0%, #0c0c0c 0%, var(--bg) 55%);
     background-attachment: fixed;
   }
 
