@@ -8,6 +8,7 @@ import {
   Crosshair,
   CalendarClock,
   Bell,
+  Settings,
   ShieldCheck,
   LogOut,
 } from "lucide-react"
@@ -19,6 +20,7 @@ const NAV = [
   { href: "/targets", label: "Targets", icon: Crosshair },
   { href: "/schedules", label: "Schedules", icon: CalendarClock },
   { href: "/alerts", label: "Alerts", icon: Bell },
+  { href: "/settings", label: "Settings", icon: Settings },
 ]
 
 function isActive(pathname: string, href: string) {

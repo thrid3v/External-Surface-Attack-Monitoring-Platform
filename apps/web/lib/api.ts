@@ -93,8 +93,12 @@ export async function getTargetHistory(target: string) {
   return apiFetch<TargetHistory>(`/targets/${encodeURIComponent(target)}/history`)
 }
 
+export async function cancelScan(scan_id: string) {
+  return apiFetch<{ canceled: boolean }>(`/scans/${scan_id}/cancel`, { method: "POST" })
+}
+
 // --- Schedules ---
-import type { Schedule, Alert } from "./types"
+import type { Schedule, Alert, NotificationSettings } from "./types"
 
 export interface ScheduleCreate {
   target: string
@@ -118,6 +122,32 @@ export async function toggleSchedule(id: string) {
 
 export async function deleteSchedule(id: string) {
   return apiFetch<{ deleted: boolean }>(`/schedules/${id}`, { method: "DELETE" })
+}
+
+export async function runScheduleNow(id: string) {
+  return apiFetch<{ scan_id: string; status: string }>(`/schedules/${id}/run`, { method: "POST" })
+}
+
+// --- Notification settings ---
+export interface NotificationTestResult {
+  email?: { ok: boolean; error: string | null }
+  webhook?: { ok: boolean; error: string | null }
+  detail?: string
+}
+
+export async function getNotificationSettings() {
+  return apiFetch<NotificationSettings>("/settings/notifications")
+}
+
+export async function updateNotificationSettings(payload: Partial<NotificationSettings>) {
+  return apiFetch<NotificationSettings>("/settings/notifications", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function testNotification() {
+  return apiFetch<NotificationTestResult>("/settings/notifications/test", { method: "POST" })
 }
 
 // --- Alerts ---

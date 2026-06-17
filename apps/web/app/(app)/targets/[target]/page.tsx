@@ -2,9 +2,10 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { ArrowLeft } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { ArrowLeft, Radar } from "lucide-react"
 
-import { getTargetHistory, type TargetHistory } from "@/lib/api"
+import { getTargetHistory, startScan, type TargetHistory } from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { RiskBadge } from "@/components/risk-badge"
@@ -12,10 +13,22 @@ import { RiskTrend } from "@/components/charts/risk-trend"
 import { timeAgo } from "@/lib/format"
 
 export default function TargetDetailPage({ params }: { params: Promise<{ target: string }> }) {
+  const router = useRouter()
   const { target } = React.use(params)
   const decoded = decodeURIComponent(target)
   const [history, setHistory] = React.useState<TargetHistory | null>(null)
   const [loading, setLoading] = React.useState(true)
+  const [rescanning, setRescanning] = React.useState(false)
+
+  const onRescan = async () => {
+    setRescanning(true)
+    try {
+      const { scan_id } = await startScan(decoded)
+      router.push(`/scan/${scan_id}`)
+    } catch {
+      setRescanning(false)
+    }
+  }
 
   React.useEffect(() => {
     getTargetHistory(decoded)
@@ -41,9 +54,15 @@ export default function TargetDetailPage({ params }: { params: Promise<{ target:
         </Button>
       </Link>
 
-      <div>
-        <p className="text-xs font-medium uppercase tracking-[0.3em] text-primary">Target</p>
-        <h1 className="font-heading font-mono text-2xl font-semibold">{decoded}</h1>
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-[0.3em] text-primary">Target</p>
+          <h1 className="font-heading font-mono text-2xl font-semibold">{decoded}</h1>
+        </div>
+        <Button onClick={onRescan} disabled={rescanning} className="shrink-0">
+          <Radar className="mr-1.5 h-4 w-4" />
+          {rescanning ? "Starting…" : "Re-scan"}
+        </Button>
       </div>
 
       <Card>

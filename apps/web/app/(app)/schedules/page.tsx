@@ -1,13 +1,15 @@
 "use client"
 
 import * as React from "react"
-import { CalendarClock, Trash2, Plus } from "lucide-react"
+import { useRouter } from "next/navigation"
+import { CalendarClock, Trash2, Plus, Play } from "lucide-react"
 
 import {
   listSchedules,
   createSchedule,
   toggleSchedule,
   deleteSchedule,
+  runScheduleNow,
 } from "@/lib/api"
 import type { Schedule } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,7 +30,9 @@ const INTERVALS = [
 ]
 
 export default function SchedulesPage() {
+  const router = useRouter()
   const [schedules, setSchedules] = React.useState<Schedule[]>([])
+  const [running, setRunning] = React.useState<string | null>(null)
   const [target, setTarget] = React.useState("")
   const [profile, setProfile] = React.useState("top-1000")
   const [interval, setInterval] = React.useState(1440)
@@ -135,6 +139,22 @@ export default function SchedulesPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={async () => {
+                        setRunning(s.id)
+                        try {
+                          const { scan_id } = await runScheduleNow(s.id)
+                          router.push(`/scan/${scan_id}`)
+                        } catch {
+                          setRunning(null)
+                        }
+                      }}
+                      disabled={running === s.id}
+                      className="flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+                    >
+                      <Play className="h-3 w-3" />
+                      {running === s.id ? "Running…" : "Run now"}
+                    </button>
                     <button
                       onClick={() => toggleSchedule(s.id).then(refresh)}
                       className={cn(

@@ -3,9 +3,9 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import { Clock, AlertCircle, ArrowLeft, ShieldAlert } from "lucide-react"
+import { Clock, AlertCircle, ArrowLeft, ShieldAlert, Ban } from "lucide-react"
 
-import { getScanStatus, getScanReport, getScanDiff } from "@/lib/api"
+import { getScanStatus, getScanReport, getScanDiff, cancelScan } from "@/lib/api"
 import type { ScanReport, CVEResult, DiffResult } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -44,7 +44,8 @@ function Stat({ label, value, icon: Icon }: { label: string; value: React.ReactN
 export default function ResultsPage({ params }: PageProps) {
   const { id } = React.use(params)
   const router = useRouter()
-  const [status, setStatus] = React.useState<"pending" | "running" | "complete" | "failed">("pending")
+  const [status, setStatus] = React.useState<"pending" | "running" | "complete" | "failed" | "canceled">("pending")
+  const [canceling, setCanceling] = React.useState(false)
   const [report, setReport] = React.useState<ScanReport | null>(null)
   const [diff, setDiff] = React.useState<DiffResult | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -76,6 +77,9 @@ export default function ResultsPage({ params }: PageProps) {
           stop()
           setError(s.error || "Scan failed without a specific error message")
           setStatus("failed")
+        } else if (s.status === "canceled") {
+          stop()
+          setStatus("canceled")
         } else {
           setStatus(s.status as "pending" | "running")
           setCurrentModule(s.current_module || null)
@@ -92,13 +96,56 @@ export default function ResultsPage({ params }: PageProps) {
   if (status === "pending" || status === "running") {
     return (
       <div className="mx-auto max-w-2xl">
+        <div className="mb-6 flex items-center justify-between">
+          <Link href="/">
+            <Button variant="ghost" size="sm">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back
+            </Button>
+          </Link>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={canceling}
+            onClick={async () => {
+              setCanceling(true)
+              try {
+                await cancelScan(id)
+                setStatus("canceled")
+              } catch {
+                setCanceling(false)
+              }
+            }}
+          >
+            <Ban className="mr-2 h-4 w-4" />
+            {canceling ? "Canceling…" : "Cancel scan"}
+          </Button>
+        </div>
+        <ScanProgress currentModule={currentModule} target={id} />
+      </div>
+    )
+  }
+
+  if (status === "canceled") {
+    return (
+      <div className="mx-auto max-w-2xl">
         <Link href="/">
           <Button variant="ghost" size="sm" className="mb-6">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back
           </Button>
         </Link>
-        <ScanProgress currentModule={currentModule} target={id} />
+        <Card>
+          <CardHeader className="flex-row items-center gap-4">
+            <span className="grid h-12 w-12 place-items-center rounded-2xl bg-muted">
+              <Ban className="h-6 w-6 text-muted-foreground" />
+            </span>
+            <CardTitle>Scan canceled</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => router.push("/")}>Back to dashboard</Button>
+          </CardContent>
+        </Card>
       </div>
     )
   }

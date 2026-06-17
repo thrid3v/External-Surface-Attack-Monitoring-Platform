@@ -153,3 +153,12 @@ export interface Alert {
   read: boolean
   created_at: string | null
 }
+
+export interface NotificationSettings {
+  owner_email: string
+  email_enabled: boolean
+  email_address: string | null
+  webhook_enabled: boolean
+  webhook_url: string | null
+  min_severity: string
+}
