@@ -39,7 +39,7 @@ export function RiskTrend({ data }: { data: TrendDatum[] }) {
           <YAxis domain={[0, 100]} tick={{ fill: "#2f9e54", fontSize: 11 }} axisLine={false} tickLine={false} />
           <Tooltip
             contentStyle={{
-              background: "#0d130d",
+              background: "#0c0c0c",
               border: "1px solid #16361f",
               borderRadius: 0,
               color: "#43d675",
