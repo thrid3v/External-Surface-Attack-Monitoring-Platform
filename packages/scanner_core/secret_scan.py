@@ -17,17 +17,17 @@ import re
 import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from typing import Optional
+from typing import Iterable, Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
 try:
-    from .models import Finding
+    from .models import Finding, PortResult
 except ImportError:  # pragma: no cover
-    from models import Finding
+    from models import Finding, PortResult
 
-from .http_common import get
+from .http_common import USER_AGENT, base_urls, get
 
 logger = logging.getLogger(__name__)
 
@@ -200,3 +200,66 @@ def _scan_url(
     if _is_text_like(resp, url):
         findings.extend(_scan_content(url, _body(resp)))
     return resp
+
+
+def scan_for_secrets(host: str, ports: Iterable[PortResult]) -> list[Finding]:
+    """Scan the host's HTTP services for exposed secrets and credentials."""
+    bases = base_urls(host, list(ports))[:MAX_BASE_URLS]
+    if not bases:
+        return []
+    budget = _Budget(deadline=time.monotonic() + MODULE_DEADLINE_SECONDS, assets_left=MAX_ASSETS)
+    findings: list[Finding] = []
+    scanned: set[str] = set()
+    with httpx.Client(verify=False, headers={"User-Agent": USER_AGENT}, follow_redirects=False) as client:
+        try:
+            for base in bases:
+                netloc = urlparse(base).netloc
+
+                # Exposed config/.env + .git files: scan contents and flag exposure.
+                for path in SENSITIVE_PATHS + GIT_PATHS:
+                    if budget.expired():
+                        break
+                    resp = _scan_url(client, base + path, scanned, findings)
+                    if resp is not None and resp.status_code == 200:
+                        findings.append(_exposure_finding(base + path))
+
+                # Shallow same-host crawl: scan each page body + linked text assets.
+                to_visit = [base]
+                page_seen: set[str] = set()
+                pages = 0
+                while to_visit and pages < MAX_PAGES_CRAWLED and not budget.expired():
+                    page = to_visit.pop(0)
+                    if page in page_seen:
+                        continue
+                    page_seen.add(page)
+                    pages += 1
+                    resp = _scan_url(client, page, scanned, findings)
+                    if resp is None or "html" not in resp.headers.get("content-type", "").lower():
+                        continue
+                    extractor = _AssetExtractor()
+                    try:
+                        extractor.feed(resp.text or "")
+                    except Exception:  # pragma: no cover - defensive
+                        continue
+                    for src in extractor.assets:
+                        if budget.assets_left <= 0 or budget.expired():
+                            break
+                        asset = urljoin(page, src).split("#")[0]
+                        if urlparse(asset).netloc != netloc:
+                            continue
+                        budget.assets_left -= 1
+                        _scan_url(client, asset, scanned, findings)
+                    for href in extractor.links:
+                        nxt = urljoin(page, href).split("#")[0]
+                        if (urlparse(nxt).netloc == netloc and nxt not in page_seen
+                                and nxt not in to_visit and len(to_visit) < MAX_PAGES_CRAWLED):
+                            to_visit.append(nxt)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("secret_scan: failed for %s: %s", host, exc)
+
+    deduped: dict[tuple[str, Optional[str], Optional[str]], Finding] = {}
+    for f in findings:
+        deduped[(f.title, f.target, f.evidence)] = f
+    result = list(deduped.values())
+    logger.info("secret_scan: %d findings for %s", len(result), host)
+    return result

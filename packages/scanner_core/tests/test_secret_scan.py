@@ -94,3 +94,53 @@ def test_scan_url_skips_non_200_and_binary():
         resp = ss._scan_url(client, "http://t.test/img.png", set(), findings)
     assert resp is not None
     assert findings == []
+
+
+@respx.mock
+def test_scan_for_secrets_finds_key_in_linked_js():
+    from scanner_core.models import PortResult
+    page = '<html><script src="/static/app.js"></script></html>'
+    respx.get("http://v.test:80/").mock(return_value=httpx.Response(200, headers={"content-type": "text/html"}, text=page))
+    respx.get("http://v.test:80/static/app.js").mock(
+        return_value=httpx.Response(200, headers={"content-type": "application/javascript"},
+                                    text='const token="ghp_' + "b" * 36 + '";')
+    )
+    # everything else (sensitive paths, .git, /about, etc.) -> 404
+    respx.get(url__regex=r".*").mock(return_value=httpx.Response(404, text="nf"))
+
+    ports = [PortResult(port=80, protocol="tcp", state="open", service="http")]
+    findings = ss.scan_for_secrets("v.test", ports)
+    gh = [f for f in findings if "GitHub token" in f.title]
+    assert gh, f"expected GitHub token finding, got {[f.title for f in findings]}"
+    assert gh[0].severity == "HIGH"
+    assert gh[0].category == "secret_exposure"
+    assert "ghp_bbbb" not in (gh[0].evidence or "")  # redacted
+
+
+@respx.mock
+def test_scan_for_secrets_flags_exposed_env_contents():
+    from scanner_core.models import PortResult
+    respx.get("http://e.test:80/.env").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/plain"},
+                                    text="SECRET_KEY=AKIAIOSFODNN7EXAMPLE\nDEBUG=1")
+    )
+    respx.get(url__regex=r".*").mock(return_value=httpx.Response(404, text="nf"))
+    ports = [PortResult(port=80, protocol="tcp", state="open", service="http")]
+    findings = ss.scan_for_secrets("e.test", ports)
+    assert any(f.title == "Exposed sensitive file" for f in findings)
+    assert any("AWS access key" in f.title for f in findings)
+
+
+@respx.mock
+def test_scan_for_secrets_clean_site_has_no_findings():
+    from scanner_core.models import PortResult
+    respx.get("http://safe.test:80/").mock(return_value=httpx.Response(200, headers={"content-type": "text/html"}, text="<html>ok</html>"))
+    respx.get(url__regex=r".*").mock(return_value=httpx.Response(404, text="nf"))
+    ports = [PortResult(port=80, protocol="tcp", state="open", service="http")]
+    assert ss.scan_for_secrets("safe.test", ports) == []
+
+
+def test_scan_for_secrets_returns_empty_without_http_ports():
+    from scanner_core.models import PortResult
+    ports = [PortResult(port=22, protocol="tcp", state="open", service="ssh")]
+    assert ss.scan_for_secrets("nohttp.test", ports) == []
