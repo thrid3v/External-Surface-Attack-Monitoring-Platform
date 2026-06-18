@@ -14,13 +14,20 @@ raises out to the worker. Shared HTTP helpers come from http_common.
 import logging
 import math
 import re
+import time
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Optional
+from urllib.parse import urljoin, urlparse
+
+import httpx
 
 try:
     from .models import Finding
 except ImportError:  # pragma: no cover
     from models import Finding
+
+from .http_common import get
 
 logger = logging.getLogger(__name__)
 
@@ -152,3 +159,44 @@ class _AssetExtractor(HTMLParser):
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         self.handle_starttag(tag, attrs)
+
+
+@dataclass
+class _Budget:
+    deadline: float
+    assets_left: int
+
+    def expired(self) -> bool:
+        return time.monotonic() >= self.deadline
+
+
+def _is_text_like(resp: httpx.Response, url: str) -> bool:
+    ctype = resp.headers.get("content-type", "").lower()
+    if any(t in ctype for t in ("text", "javascript", "json", "xml", "yaml")):
+        return True
+    path = urlparse(url).path.lower()
+    return path.endswith(TEXT_EXTENSIONS)
+
+
+def _body(resp: httpx.Response) -> str:
+    return (resp.text or "")[:MAX_BYTES_PER_RESOURCE]
+
+
+def _scan_url(
+    client: httpx.Client,
+    url: str,
+    scanned: set[str],
+    findings: list[Finding],
+) -> Optional[httpx.Response]:
+    """Fetch `url` once; if it returns 200 with a text-like body, scan it for
+    secrets (appending to `findings`). Returns the response so the caller can
+    extract assets/links, or None if already scanned / not fetched."""
+    if url in scanned:
+        return None
+    scanned.add(url)
+    resp = get(client, url, timeout=HTTP_TIMEOUT)
+    if resp is None or resp.status_code != 200:
+        return None
+    if _is_text_like(resp, url):
+        findings.extend(_scan_content(url, _body(resp)))
+    return resp

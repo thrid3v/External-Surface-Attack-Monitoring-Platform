@@ -58,3 +58,39 @@ def test_asset_extractor_collects_scripts_links_and_anchors():
     assert "/static/config.json" in ex.assets
     assert "/about" in ex.links
     assert "https://cdn.other/x.js" in ex.links
+
+
+import httpx
+import respx
+
+
+@respx.mock
+def test_scan_url_scans_text_asset_and_records_finding():
+    respx.get("http://t.test/app.js").mock(
+        return_value=httpx.Response(200, headers={"content-type": "application/javascript"},
+                                    text='var k="AKIAIOSFODNN7EXAMPLE";')
+    )
+    scanned: set[str] = set()
+    findings: list = []
+    with httpx.Client() as client:
+        resp = ss._scan_url(client, "http://t.test/app.js", scanned, findings)
+    assert resp is not None and resp.status_code == 200
+    assert any("AWS access key" in f.title for f in findings)
+    # dedup guard: scanning the same URL again does nothing
+    with httpx.Client() as client:
+        assert ss._scan_url(client, "http://t.test/app.js", scanned, findings) is None
+
+
+@respx.mock
+def test_scan_url_skips_non_200_and_binary():
+    respx.get("http://t.test/missing").mock(return_value=httpx.Response(404, text="nope"))
+    respx.get("http://t.test/img.png").mock(
+        return_value=httpx.Response(200, headers={"content-type": "image/png"}, text="AKIAIOSFODNN7EXAMPLE")
+    )
+    findings: list = []
+    with httpx.Client() as client:
+        assert ss._scan_url(client, "http://t.test/missing", set(), findings) is None
+        # binary content-type: response returned but NOT scanned
+        resp = ss._scan_url(client, "http://t.test/img.png", set(), findings)
+    assert resp is not None
+    assert findings == []
