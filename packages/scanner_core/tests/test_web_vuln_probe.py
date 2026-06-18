@@ -30,3 +30,26 @@ def test_detect_cmd_injection_uses_arithmetic_result():
     assert wvp.CMD_MARKER not in ";echo $((13337*31337))"
     assert wvp._detect_cmd_injection(f"output: {wvp.CMD_MARKER}") is True
     assert wvp._detect_cmd_injection("output: 13337*31337") is False
+
+
+def test_input_extractor_collects_links_and_forms():
+    html = """
+    <html><body>
+      <a href="/products.php?cat=1">cat</a>
+      <a href="/about">about</a>
+      <form action="/search.php" method="post">
+        <input name="q" value="x">
+        <textarea name="note"></textarea>
+        <input name="csrf" type="hidden" value="tok">
+      </form>
+    </body></html>
+    """
+    ex = wvp._InputExtractor()
+    ex.feed(html)
+    assert "/products.php?cat=1" in ex.links
+    assert "/about" in ex.links
+    assert len(ex.forms) == 1
+    form = ex.forms[0]
+    assert form["action"] == "/search.php"
+    assert form["method"] == "post"
+    assert set(form["fields"]) == {"q", "note", "csrf"}

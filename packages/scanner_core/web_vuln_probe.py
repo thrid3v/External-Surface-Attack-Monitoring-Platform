@@ -18,6 +18,7 @@ worker. Shared HTTP helpers come from http_common.
 
 import logging
 import re
+from html.parser import HTMLParser
 from typing import Optional
 
 try:
@@ -87,3 +88,37 @@ def _detect_open_redirect(location: Optional[str]) -> bool:
 
 def _detect_cmd_injection(injected_body: str) -> bool:
     return CMD_MARKER in (injected_body or "")
+
+
+class _InputExtractor(HTMLParser):
+    """Collect anchor hrefs and form definitions from an HTML document."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[str] = []
+        self.forms: list[dict] = []
+        self._current_form: Optional[dict] = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        a = {k: (v or "") for k, v in attrs}
+        if tag == "a" and a.get("href"):
+            self.links.append(a["href"])
+        elif tag == "form":
+            self._current_form = {
+                "action": a.get("action", ""),
+                "method": (a.get("method") or "get").lower(),
+                "fields": {},
+            }
+            self.forms.append(self._current_form)
+        elif tag in ("input", "textarea", "select") and self._current_form is not None:
+            name = a.get("name")
+            if name:
+                self._current_form["fields"][name] = a.get("value") or "test"
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        # void elements like <input/> dispatch here; reuse the same logic.
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "form":
+            self._current_form = None
