@@ -16,7 +16,6 @@ import ipaddress
 import logging
 import os
 import smtplib
-import socket
 from email.message import EmailMessage
 from urllib.parse import urlparse
 
@@ -24,31 +23,13 @@ import httpx
 from sqlalchemy.orm import Session
 
 from db.models import Alert, NotificationSettings
+from services import net_guard
 
 logger = logging.getLogger(__name__)
 
 
 class WebhookURLNotAllowed(ValueError):
     """Raised when a webhook URL targets a non-public address (SSRF guard)."""
-
-
-def _resolve_ips(host: str) -> list[str]:
-    """Resolve a hostname to its IP addresses (empty list on failure)."""
-    try:
-        return [info[4][0] for info in socket.getaddrinfo(host, None)]
-    except (socket.gaierror, UnicodeError):
-        return []
-
-
-def _is_public_ip(ip_str: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(ip_str)
-    except ValueError:
-        return False
-    return not (
-        ip.is_private or ip.is_loopback or ip.is_link_local
-        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
-    )
 
 
 def validate_webhook_url(url: str | None) -> None:
@@ -66,11 +47,11 @@ def validate_webhook_url(url: str | None) -> None:
         ipaddress.ip_address(host)
         ips = [host]  # literal IP — check it directly, no DNS
     except ValueError:
-        ips = _resolve_ips(host)
+        ips = net_guard.resolve_ips(host)
     if not ips:
         raise WebhookURLNotAllowed(f"Could not resolve webhook host: {host}")
     for ip in ips:
-        if not _is_public_ip(ip):
+        if not net_guard.is_public_ip(ip):
             raise WebhookURLNotAllowed(f"Webhook host resolves to a non-public address ({ip})")
 
 # Canonical severity ordering. Higher rank = more severe.

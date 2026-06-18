@@ -12,8 +12,11 @@ on PATH — same model as the required `nmap` binary).
 
 import json
 import logging
+import os
 import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 try:
     from .models import Finding
@@ -27,8 +30,30 @@ NUCLEI_SEVERITIES = "low,medium,high,critical"
 MAX_TARGETS = 5
 
 
+def _nuclei_path() -> str | None:
+    """Resolve the nuclei binary, independent of venv activation.
+
+    Resolution order:
+      1. ``NUCLEI_PATH`` env override (explicit operator control).
+      2. Next to the running interpreter (a venv's Scripts/bin dir) — this is
+         where we install it, and it works even when the venv isn't "activated"
+         on PATH (e.g. Celery launched by absolute path).
+      3. Anywhere on PATH.
+    """
+    override = os.getenv("NUCLEI_PATH")
+    if override and Path(override).exists():
+        return override
+
+    binary = "nuclei.exe" if os.name == "nt" else "nuclei"
+    local = Path(sys.executable).parent / binary
+    if local.exists():
+        return str(local)
+
+    return shutil.which("nuclei")
+
+
 def is_nuclei_available() -> bool:
-    return shutil.which("nuclei") is not None
+    return _nuclei_path() is not None
 
 
 def _map_severity(value: str) -> str:
@@ -64,12 +89,13 @@ def scan_with_nuclei(urls: list[str]) -> list[Finding]:
     targets = [u for u in (urls or []) if u][:MAX_TARGETS]
     if not targets:
         return []
-    if not is_nuclei_available():
-        logger.warning("nuclei_scan: nuclei binary not found on PATH — skipping template scan")
+    nuclei_bin = _nuclei_path()
+    if nuclei_bin is None:
+        logger.warning("nuclei_scan: nuclei binary not found — skipping template scan")
         return []
 
     cmd = [
-        "nuclei", "-jsonl", "-silent", "-no-color", "-disable-update-check",
+        nuclei_bin, "-jsonl", "-silent", "-no-color", "-disable-update-check",
         "-severity", NUCLEI_SEVERITIES, "-timeout", "5", "-rate-limit", "100",
     ]
     try:

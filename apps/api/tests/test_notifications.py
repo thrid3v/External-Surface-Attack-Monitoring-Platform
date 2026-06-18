@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from db.models import Alert, NotificationSettings
-from services import notifications
+from services import net_guard, notifications
 
 
 def _make_alert(severity: str, owner: str = "u@example.com") -> Alert:
@@ -122,7 +122,7 @@ def test_send_webhook_posts_expected_payload(monkeypatch):
         return _Resp()
 
     monkeypatch.setattr(notifications.httpx, "post", fake_post)
-    monkeypatch.setattr(notifications, "_resolve_ips", lambda host: ["93.184.216.34"])
+    monkeypatch.setattr(net_guard, "resolve_ips", lambda host: ["93.184.216.34"])
     monkeypatch.setenv("FRONTEND_URL", "https://easm.example")
 
     settings = NotificationSettings(
@@ -152,7 +152,7 @@ def test_send_webhook_blocks_cloud_metadata_address(monkeypatch):
 
 
 def test_send_webhook_blocks_loopback(monkeypatch):
-    monkeypatch.setattr(notifications, "_resolve_ips", lambda host: ["127.0.0.1"])
+    monkeypatch.setattr(net_guard, "resolve_ips", lambda host: ["127.0.0.1"])
     posted = []
     monkeypatch.setattr(notifications.httpx, "post", lambda *a, **k: posted.append(a))
     s = NotificationSettings(
@@ -165,7 +165,7 @@ def test_send_webhook_blocks_loopback(monkeypatch):
 
 
 def test_send_webhook_allows_public_target(monkeypatch):
-    monkeypatch.setattr(notifications, "_resolve_ips", lambda host: ["93.184.216.34"])
+    monkeypatch.setattr(net_guard, "resolve_ips", lambda host: ["93.184.216.34"])
 
     class _Resp:
         def raise_for_status(self):

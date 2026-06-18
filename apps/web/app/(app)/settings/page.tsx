@@ -116,7 +116,7 @@ export default function SettingsPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
-        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">// notifications</h1>
+        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">{"// notifications"}</h1>
         <p className="mt-1 text-xs text-phosphor-dim">
           how you&apos;re alerted when a re-scan surfaces new risk
         </p>

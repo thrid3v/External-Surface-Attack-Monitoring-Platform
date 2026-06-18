@@ -38,7 +38,7 @@ export default async function DashboardPage() {
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       <header className="border-b border-border pb-3">
-        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">// overview</h1>
+        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">{"// overview"}</h1>
         <p className="mt-1 text-xs text-phosphor-dim">external attack surface — at a glance</p>
       </header>
 

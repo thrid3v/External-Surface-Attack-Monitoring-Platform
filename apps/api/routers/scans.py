@@ -1,8 +1,6 @@
-import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -13,13 +11,13 @@ from auth import get_current_user
 from constants import MODULE_ORDER, PORT_PROFILES
 from db.models import Scan
 from deps import get_db
+from services import net_guard
 from services.diff import diff_reports
+from services.rate_limit import enforce_scan_rate_limit
 from utils import format_datetime
 from workers.scan_worker import run_scan
 
 router = APIRouter()
-
-VALID_TARGET_PATTERN = re.compile(r"^[A-Za-z0-9.-]+$")
 
 
 class ScanCreate(BaseModel):
@@ -54,26 +52,11 @@ class ScanSummary(BaseModel):
 
 
 def _validate_and_clean_target(raw_target: str) -> str:
-    if not raw_target or not raw_target.strip():
-        raise HTTPException(status_code=422, detail="Target is required")
-
-    target = raw_target.strip()
-    if target.startswith("http://") or target.startswith("https://"):
-        parsed = urlparse(target)
-        target = parsed.netloc or parsed.path
-
-    target = target.split("/", 1)[0].strip().lower()
-    target = target.split(":", 1)[0]
-    if target.startswith("www."):
-        target = target[4:]
-
-    if not target or " " in target:
-        raise HTTPException(status_code=422, detail="Invalid target format")
-    if not VALID_TARGET_PATTERN.fullmatch(target):
-        raise HTTPException(status_code=422, detail="Invalid target format")
-    if "." not in target and not target.replace(".", "").isdigit():
-        raise HTTPException(status_code=422, detail="Invalid target format")
-    return target
+    """Clean a target and enforce the SSRF policy, surfacing errors as HTTP 422."""
+    try:
+        return net_guard.validate_scan_target(raw_target)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 def _get_modules_complete(current_module: str | None, status: str) -> list[str]:
@@ -109,6 +92,7 @@ def create_scan(
         )
 
     target = _validate_and_clean_target(payload.target)
+    enforce_scan_rate_limit(db, user)
     # A named profile (if valid) resolves to a port range; an explicit
     # port_range in the request still takes precedence when no profile is given.
     if payload.profile:

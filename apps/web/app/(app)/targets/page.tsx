@@ -13,7 +13,7 @@ export default async function TargetsPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <header className="border-b border-border pb-3">
-        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">// targets</h1>
+        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">{"// targets"}</h1>
         <p className="mt-1 text-xs text-phosphor-dim">monitored hosts — last observed risk</p>
       </header>
 
