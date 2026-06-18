@@ -15,6 +15,7 @@ MODULE_ORDER: list[str] = [
     "osint_fetcher",
     "service_probe",
     "web_audit",
+    "web_vuln_probe",
     "takeover_check",
     "email_audit",
     "nuclei_scan",

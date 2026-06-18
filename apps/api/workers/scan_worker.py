@@ -33,6 +33,7 @@ from scanner_core.port_scanner import scan_ports
 from scanner_core.report_gen import generate_report
 from scanner_core.service_probe import audit_all_tls, probe_all_http_ports
 from scanner_core.web_audit import audit_web
+from scanner_core.web_vuln_probe import probe_web_vulns
 from scanner_core.takeover import check_takeovers
 from scanner_core.email_audit import audit_email
 from scanner_core.nuclei_scan import scan_with_nuclei
@@ -360,6 +361,19 @@ def run_scan(
                 logger.info("scan_worker: scan=%s web_audit found %d findings", scan_id, len(findings))
             except Exception as exc:
                 errors["web_audit"] = str(exc)
+
+        aborted = _aborted(db, scan, start_time)
+        if aborted:
+            return {"status": aborted}
+
+        if "web_vuln_probe" in allowed_modules:
+            _set_module_running(db, scan, "web_vuln_probe")
+            modules_run.append("web_vuln_probe")
+            try:
+                findings.extend(probe_web_vulns(target, ports))
+                logger.info("scan_worker: scan=%s web_vuln_probe found %d findings", scan_id, len(findings))
+            except Exception as exc:
+                errors["web_vuln_probe"] = str(exc)
 
         aborted = _aborted(db, scan, start_time)
         if aborted:

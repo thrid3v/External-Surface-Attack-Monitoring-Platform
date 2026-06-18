@@ -27,11 +27,10 @@ try:
 except ImportError:  # pragma: no cover
     from models import Finding, PortResult
 
+from .http_common import USER_AGENT, base_urls, get
+
 logger = logging.getLogger(__name__)
 
-HTTP_TIMEOUT = 8
-USER_AGENT = "Mozilla/5.0 (compatible; EASM-Scanner/1.0)"
-HTTP_PORTS = [80, 443, 8080, 8443, 8000, 3000]
 MAX_BASE_URLS = 2  # bound path probing across services
 
 warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
@@ -51,36 +50,10 @@ PATH_CHECKS: list[tuple[str, str, str, str, str]] = [
 ]
 
 
-def _base_urls(host: str, ports: Iterable[PortResult]) -> list[str]:
-    seen: set[tuple[str, int]] = set()
-    urls: list[str] = []
-    for port in ports or []:
-        service = (port.service or "").lower()
-        is_http = service in {"http", "https", "http-alt", "ssl"} or port.port in HTTP_PORTS
-        if not is_http:
-            continue
-        use_tls = port.port in (443, 8443) or "ssl" in service or "https" in service
-        scheme = "https" if use_tls else "http"
-        key = (scheme, port.port)
-        if key in seen:
-            continue
-        seen.add(key)
-        urls.append(f"{scheme}://{host}:{port.port}")
-    return urls
-
-
-def _get(client: httpx.Client, url: str, headers: dict[str, str] | None = None):
-    try:
-        return client.get(url, headers=headers, timeout=HTTP_TIMEOUT, follow_redirects=False)
-    except (httpx.RequestError, OSError) as exc:
-        logger.debug("web_audit: request failed for %s: %s", url, exc)
-        return None
-
-
 def _check_paths(client: httpx.Client, base: str) -> list[Finding]:
     findings: list[Finding] = []
     for path, title, severity, signature, remediation in PATH_CHECKS:
-        resp = _get(client, base + path)
+        resp = get(client, base + path)
         if resp is None or resp.status_code != 200:
             continue
         body = (resp.text or "")[:4000].lower()
@@ -104,7 +77,7 @@ def _check_paths(client: httpx.Client, base: str) -> list[Finding]:
 
 def _check_root(client: httpx.Client, base: str) -> list[Finding]:
     findings: list[Finding] = []
-    resp = _get(client, base + "/")
+    resp = get(client, base + "/")
     if resp is None:
         return findings
     body = (resp.text or "")[:4000].lower()
@@ -153,7 +126,7 @@ def _check_root(client: httpx.Client, base: str) -> list[Finding]:
             ))
 
     # CORS
-    cors = _get(client, base + "/", headers={"Origin": "https://evil.example"})
+    cors = get(client, base + "/", headers={"Origin": "https://evil.example"})
     if cors is not None:
         ch = {k.lower(): v for k, v in cors.headers.items()}
         acao = ch.get("access-control-allow-origin", "")
@@ -185,7 +158,7 @@ def _check_root(client: httpx.Client, base: str) -> list[Finding]:
 
 def audit_web(host: str, ports: Iterable[PortResult]) -> list[Finding]:
     """Run web exposure checks against the host's HTTP services."""
-    bases = _base_urls(host, list(ports))[:MAX_BASE_URLS]
+    bases = base_urls(host, list(ports))[:MAX_BASE_URLS]
     if not bases:
         return []
     findings: list[Finding] = []
