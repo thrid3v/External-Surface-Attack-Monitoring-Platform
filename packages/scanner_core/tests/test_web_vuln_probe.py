@@ -138,3 +138,21 @@ def test_probe_web_vulns_returns_empty_without_http_ports():
     from scanner_core.models import PortResult
     ports = [PortResult(port=22, protocol="tcp", state="open", service="ssh")]
     assert wvp.probe_web_vulns("nohttp.test", ports) == []
+
+
+@respx.mock
+def test_probe_web_vulns_open_redirect_requires_3xx_status():
+    from scanner_core.models import PortResult
+
+    def handler(request):
+        nxt = request.url.params.get("next", "")
+        # Reflect the param into Location but on a 200 (not a real redirect).
+        return httpx.Response(200, headers={"Location": nxt}, text="ok")
+
+    respx.get("http://r.test:80/").mock(
+        return_value=httpx.Response(200, text='<a href="/go.php?next=1">go</a>')
+    )
+    respx.get("http://r.test:80/go.php").mock(side_effect=handler)
+    ports = [PortResult(port=80, protocol="tcp", state="open", service="http")]
+    findings = wvp.probe_web_vulns("r.test", ports)
+    assert not [f for f in findings if "redirect" in f.title.lower()]

@@ -288,7 +288,7 @@ def _probe_point(client: httpx.Client, point: InjectionPoint, budget: _Budget) -
 
         # Open redirect
         resp = _request(client, point.url, point.method, _mutate(point.params, name, OPEN_REDIRECT_PAYLOAD))
-        if resp is not None and _detect_open_redirect(resp.headers.get("location")):
+        if resp is not None and 300 <= resp.status_code < 400 and _detect_open_redirect(resp.headers.get("location")):
             findings.append(_finding(
                 "Open redirect", "MEDIUM", target_desc,
                 f"Location header points to attacker host via '{name}'",
