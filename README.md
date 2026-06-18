@@ -422,14 +422,13 @@ easm/
 │   │   ├── app/api/easm/[...path]/ # BFF proxy → FastAPI (injects auth headers)
 │   │   ├── components/             # report panels, charts, app-shell, ui/
 │   │   └── lib/                    # api.ts, server-api.ts, auth.ts, severity.ts, types.ts
-│   ├── api/                        # FastAPI backend + Celery worker/beat
-│   │   ├── main.py  auth.py  constants.py  deps.py  utils.py
-│   │   ├── routers/                # scans, targets, schedules, alerts, settings
-│   │   ├── services/               # diff (change detection), notifications (email/webhook)
-│   │   ├── workers/scan_worker.py  # Celery app, run_scan pipeline, beat tasks, reaper, delivery
-│   │   ├── db/models.py            # Scan, Schedule, Alert, NotificationSettings
-│   │   └── alembic/                # migrations
-│   └── mcp_server/                 # MCP server (placeholder / WIP)
+│   └── api/                        # FastAPI backend + Celery worker/beat
+│       ├── main.py  auth.py  constants.py  deps.py  utils.py
+│       ├── routers/                # scans, targets, schedules, alerts, settings
+│       ├── services/               # net_guard (SSRF), rate_limit, diff, notifications
+│       ├── workers/scan_worker.py  # Celery app, run_scan pipeline, beat tasks, reaper, delivery
+│       ├── db/models.py            # Scan, Schedule, Alert, NotificationSettings
+│       └── alembic/                # migrations
 ├── packages/
 │   └── scanner_core/               # shared, installable scanning package (+ tests)
 └── docker-compose.yml              # PostgreSQL 16 + Redis 7
@@ -468,7 +467,7 @@ easm/
 
 ## Roadmap
 
-- MCP server (`apps/mcp_server/`) exposing scans/reports as tools — currently a placeholder
+- MCP server exposing scans/reports as agent tools
 - Cloud exposure checks (open S3 buckets, unauthenticated Redis/Mongo/Elasticsearch)
 - Secrets-in-JavaScript / leaked API-key scanning
 - DKIM selector probing
