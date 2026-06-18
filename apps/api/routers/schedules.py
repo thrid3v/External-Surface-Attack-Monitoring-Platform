@@ -12,6 +12,8 @@ from auth import get_current_user
 from constants import MODULE_ORDER, PORT_PROFILES
 from db.models import Scan, Schedule
 from deps import get_db
+from services import net_guard
+from services.rate_limit import enforce_scan_rate_limit
 from utils import format_datetime
 from workers.scan_worker import run_scan
 
@@ -24,6 +26,7 @@ class ScheduleCreate(BaseModel):
     profile: str | None = None
     modules: list[str] | None = None
     interval_minutes: int = Field(1440, ge=5)
+    i_own_this_target: bool = Field(False)
 
 
 def _serialize(s: Schedule) -> dict[str, Any]:
@@ -58,9 +61,17 @@ def create_schedule(
     db: Session = Depends(get_db),
     user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    target = payload.target.strip().lower()
-    if not target:
-        raise HTTPException(status_code=422, detail="Target is required")
+    if not payload.i_own_this_target:
+        raise HTTPException(
+            status_code=403,
+            detail="You must confirm you own or have permission to scan this target.",
+        )
+    # Same SSRF target policy as one-off scans (blocks private/internal hosts
+    # unless ALLOW_PRIVATE_TARGETS is set).
+    try:
+        target = net_guard.validate_scan_target(payload.target)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     port_range = payload.port_range
     if payload.profile:
@@ -123,6 +134,7 @@ def run_schedule_now(
 ) -> dict[str, str]:
     """Trigger a schedule immediately, reusing its stored scan configuration."""
     schedule = _owned(db, schedule_id, user)
+    enforce_scan_rate_limit(db, user)
     now = datetime.now(timezone.utc)
     scan_id = str(uuid.uuid4())
     port_range = schedule.port_range or "1-1000"

@@ -11,9 +11,8 @@ EASM (External Attack Surface Management) — a platform for discovering and ass
 ```
 easm/
 ├── apps/
-│   ├── web/            # Next.js 15 frontend (React 19, TypeScript, Tailwind 4)
-│   ├── api/            # FastAPI backend (Python)
-│   └── mcp_server/     # MCP Server (placeholder)
+│   ├── web/            # Next.js 16 frontend (React 19, TypeScript, Tailwind 4)
+│   └── api/            # FastAPI backend (Python)
 ├── packages/
 │   └── scanner_core/   # Shared Python scanning modules (installable package)
 └── docker-compose.yml  # PostgreSQL 16 + Redis 7
@@ -104,6 +103,8 @@ Each module is imported from `packages/scanner_core/` and returns Pydantic model
 - `apps/api/auth.py` — BFF auth: the API is fail-closed behind `X-Internal-Secret` + `X-User-Email` (the Next.js server injects these); `get_current_user` returns the acting email for ownership scoping
 - `apps/api/routers/scans.py` — scan CRUD, status, diff, **cancel** (`POST /{id}/cancel`, cooperative)
 - `apps/api/routers/{targets,schedules,alerts,settings}.py` — target aggregation/history, recurring schedules (+ `POST /{id}/run`), change-detection alerts, and per-user notification settings (+ `POST /notifications/test`)
+- `apps/api/services/net_guard.py` — shared SSRF guard. **All scan-target validation goes through `validate_scan_target`** (used by both `scans.py` and `schedules.py`); it cleans the target and rejects private/internal/cloud-metadata hosts unless `ALLOW_PRIVATE_TARGETS=true`. The webhook delivery guard reuses its IP helpers.
+- `apps/api/services/rate_limit.py` — per-user scan rate limiting (`MAX_CONCURRENT_SCANS_PER_USER`, `MAX_SCANS_PER_HOUR`). Enforced on user-initiated scan creation + schedule run-now; the beat dispatcher (`enqueue_due_scans`) intentionally bypasses it.
 - `apps/api/db/models.py` — SQLAlchemy `Scan` model; `.result` property auto-parses `result_json`
 - `apps/api/deps.py` — DB session dependency injection
 - Database is auto-created on startup via `Base.metadata.create_all()` if `DATABASE_URL` is set; Alembic handles schema migrations
