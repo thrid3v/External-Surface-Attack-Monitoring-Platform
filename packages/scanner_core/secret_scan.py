@@ -14,6 +14,7 @@ raises out to the worker. Shared HTTP helpers come from http_common.
 import logging
 import math
 import re
+from html.parser import HTMLParser
 from typing import Optional
 
 try:
@@ -130,3 +131,24 @@ def _scan_content(url: str, content: str) -> list[Finding]:
         findings.append(_finding("High-entropy secret in assignment", "MEDIUM", url, redacted))
 
     return findings
+
+
+class _AssetExtractor(HTMLParser):
+    """Collect script/link asset URLs and anchor page links from an HTML page."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.assets: list[str] = []
+        self.links: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        a = {k: (v or "") for k, v in attrs}
+        if tag == "script" and a.get("src"):
+            self.assets.append(a["src"])
+        elif tag == "link" and a.get("href"):
+            self.assets.append(a["href"])
+        elif tag == "a" and a.get("href"):
+            self.links.append(a["href"])
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        self.handle_starttag(tag, attrs)

@@ -40,3 +40,21 @@ def test_findings_are_redacted_and_tagged():
     assert f.source == "secret_scan"
     assert "AKIAIOSFODNN7EXAMPLE" not in (f.evidence or "")  # full secret never stored
     assert "AKIA" in (f.evidence or "")  # redacted form present
+
+
+def test_asset_extractor_collects_scripts_links_and_anchors():
+    html = """
+    <html><head>
+      <script src="/static/app.bundle.js"></script>
+      <link href="/static/config.json" rel="preload">
+    </head><body>
+      <a href="/about">about</a>
+      <a href="https://cdn.other/x.js">offsite</a>
+    </body></html>
+    """
+    ex = ss._AssetExtractor()
+    ex.feed(html)
+    assert "/static/app.bundle.js" in ex.assets
+    assert "/static/config.json" in ex.assets
+    assert "/about" in ex.links
+    assert "https://cdn.other/x.js" in ex.links
