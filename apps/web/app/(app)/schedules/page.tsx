@@ -53,7 +53,7 @@ export default function SchedulesPage() {
     setBusy(true)
     setError(null)
     try {
-      await createSchedule({ target: t, profile, interval_minutes: interval })
+      await createSchedule({ target: t, profile, interval_minutes: interval, i_own_this_target: true })
       setTarget("")
       refresh()
     } catch (e) {
@@ -66,7 +66,7 @@ export default function SchedulesPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
-        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">// schedules</h1>
+        <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">{"// schedules"}</h1>
         <p className="mt-1 text-xs text-phosphor-dim">recurring scans — cron-driven recon</p>
       </div>
 

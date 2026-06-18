@@ -21,6 +21,10 @@ export default function LoginPage() {
       typeof window !== "undefined" &&
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
     if (reduce) {
+      // Reduced-motion: reveal the full boot text immediately. This must run
+      // post-mount (not in a render-time initializer) to avoid an SSR/client
+      // hydration mismatch, so the setState here is intentional.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShown(BOOT_LINES.length)
       return
     }

@@ -3,9 +3,9 @@
 import * as React from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import { Clock, AlertCircle, ArrowLeft, ShieldAlert, Ban } from "lucide-react"
+import { Clock, AlertCircle, ArrowLeft, ShieldAlert, Ban, Trash2 } from "lucide-react"
 
-import { getScanStatus, getScanReport, getScanDiff, cancelScan } from "@/lib/api"
+import { getScanStatus, getScanReport, getScanDiff, cancelScan, deleteScan } from "@/lib/api"
 import type { ScanReport, CVEResult, DiffResult } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -46,6 +46,7 @@ export default function ResultsPage({ params }: PageProps) {
   const router = useRouter()
   const [status, setStatus] = React.useState<"pending" | "running" | "complete" | "failed" | "canceled">("pending")
   const [canceling, setCanceling] = React.useState(false)
+  const [deleting, setDeleting] = React.useState(false)
   const [report, setReport] = React.useState<ScanReport | null>(null)
   const [diff, setDiff] = React.useState<DiffResult | null>(null)
   const [error, setError] = React.useState<string | null>(null)
@@ -92,6 +93,17 @@ export default function ResultsPage({ params }: PageProps) {
     intervalRef.current = setInterval(poll, POLLING_INTERVAL)
     return stop
   }, [id])
+
+  const onDelete = async () => {
+    if (!window.confirm("Delete this scan and its report permanently?")) return
+    setDeleting(true)
+    try {
+      await deleteScan(id)
+      router.push("/")
+    } catch {
+      setDeleting(false)
+    }
+  }
 
   if (status === "pending" || status === "running") {
     return (
@@ -207,14 +219,25 @@ export default function ResultsPage({ params }: PageProps) {
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <Link href="/">
-          <Button variant="ghost" size="sm">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back
+      <Link href="/">
+        <Button variant="ghost" size="sm">
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back
+        </Button>
+      </Link>
+
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs text-phosphor-dim">{"// report"}</p>
+          <h1 className="truncate font-display text-3xl leading-none text-phosphor-bright glow">{target}</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <ReportExport report={report} target={target} />
+          <Button variant="outline" size="sm" onClick={onDelete} disabled={deleting}>
+            <Trash2 className="mr-1.5 h-4 w-4" />
+            {deleting ? "Deleting…" : "Delete"}
           </Button>
-        </Link>
-        <ReportExport report={report} target={target} />
+        </div>
       </div>
 
       {report.zone_transfer_vulnerable ? (

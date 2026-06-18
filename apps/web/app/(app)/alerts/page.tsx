@@ -29,7 +29,7 @@ export default function AlertsPage() {
       <header className="flex items-end justify-between gap-4 border-b border-border pb-3">
         <div>
           <h1 className="font-display text-3xl leading-none text-phosphor-bright glow">
-            // alerts {unread > 0 ? <span className="text-amber">[{unread}]</span> : null}
+            {"// alerts "}{unread > 0 ? <span className="text-amber">[{unread}]</span> : null}
           </h1>
           <p className="mt-1 text-xs text-phosphor-dim">change detection — new risk on re-scan</p>
         </div>

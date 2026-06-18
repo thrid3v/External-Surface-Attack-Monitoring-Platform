@@ -24,10 +24,8 @@ export default function RiskScore({ score, label, severitySummary, target }: Ris
   const [displayScore, setDisplayScore] = useState(0)
 
   useEffect(() => {
-    if (score === 0) {
-      setDisplayScore(0)
-      return
-    }
+    // Count up from 0 to `score`. (score === 0 resolves on the first tick, so
+    // no separate synchronous reset is needed.)
     let current = 0
     const step = Math.max(1, Math.ceil(score / 40))
     const timer = setInterval(() => {
@@ -44,7 +42,7 @@ export default function RiskScore({ score, label, severitySummary, target }: Ris
     <Card className={cn("border-l-2", c.border)}>
       <CardContent className="grid gap-6 pt-2 sm:grid-cols-[auto_1fr]">
         <div>
-          <p className="text-xs text-phosphor-dim">// risk_score</p>
+          <p className="text-xs text-phosphor-dim">{"// risk_score"}</p>
           <p className={cn("font-display text-7xl leading-none tabular-nums glow-strong", c.text)}>
             {String(displayScore).padStart(2, "0")}
             <span className="text-2xl text-phosphor-dim">/100</span>

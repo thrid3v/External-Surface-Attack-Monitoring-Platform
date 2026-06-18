@@ -97,6 +97,10 @@ export async function cancelScan(scan_id: string) {
   return apiFetch<{ canceled: boolean }>(`/scans/${scan_id}/cancel`, { method: "POST" })
 }
 
+export async function deleteScan(scan_id: string) {
+  return apiFetch<{ deleted: boolean }>(`/scans/${scan_id}`, { method: "DELETE" })
+}
+
 // --- Schedules ---
 import type { Schedule, Alert, NotificationSettings } from "./types"
 
@@ -106,6 +110,7 @@ export interface ScheduleCreate {
   port_range?: string
   modules?: string[]
   interval_minutes: number
+  i_own_this_target?: boolean
 }
 
 export async function listSchedules() {
