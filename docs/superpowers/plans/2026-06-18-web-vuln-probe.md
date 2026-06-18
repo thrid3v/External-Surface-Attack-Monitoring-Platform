@@ -4,34 +4,211 @@
 
 **Goal:** Add a `web_vuln_probe` scanner module that actively (non-destructively) tests discovered HTTP inputs for reflected XSS, error-based SQLi, path traversal/LFI, open redirect, and OS command injection, producing `Finding`s that raise risk-score fidelity on application targets.
 
-**Architecture:** A single new module `packages/scanner_core/web_vuln_probe.py` derives HTTP base URLs from discovered ports, shallow-crawls them with a stdlib `HTMLParser` to find injectable query params and form fields, then injects a small payload set per class and detects via signatures (with baseline diffing for FP reduction). Hard request/page caps plus a 45s wall-clock deadline keep it inside the scan budget. It is wired into `MODULE_ORDER` after `web_audit`.
+**Architecture:** A shared `scanner_core/http_common.py` holds HTTP-base-URL derivation and a guarded GET (extracted from `web_audit` so the two modules don't duplicate it). The new module `packages/scanner_core/web_vuln_probe.py` uses those helpers to shallow-crawl HTTP services with a stdlib `HTMLParser`, finding injectable query params and form fields, then injects a small payload set per class and detects via signatures (with baseline diffing for FP reduction). Hard request/page caps plus a 45s wall-clock deadline keep it inside the scan budget. It is wired into `MODULE_ORDER` after `web_audit`.
 
 **Tech Stack:** Python, `httpx` (already a dependency), stdlib `html.parser`/`urllib.parse`/`re`, Pydantic `Finding` model. Tests use `pytest` + `respx` (already present).
 
 ## Global Constraints
 
 - No new runtime dependencies — only `httpx` + Python stdlib.
-- All `Finding`s produced MUST use `category="web_vuln"` and `source="web_vuln_probe"`.
+- Shared HTTP helpers live in `scanner_core/http_common.py`; `web_audit` and `web_vuln_probe` both import from it rather than each defining their own `base_urls`/`get`/HTTP constants.
+- All `Finding`s produced by the probe MUST use `category="web_vuln"` and `source="web_vuln_probe"`.
 - `Finding` model fields (from `scanner_core.models`): `title` (str), `severity` (CRITICAL|HIGH|MEDIUM|LOW|INFO), `category` (str), `description` (str), `target` (Optional[str]), `evidence` (Optional[str]), `remediation` (Optional[str]), `source` (str), `references` (list[str]).
 - Payloads MUST be non-destructive: no `DROP`/`DELETE`, no `rm`, no `sleep`-based DoS.
-- Budgets are fixed (conservative): `MAX_PAGES_CRAWLED=10`, `MAX_INJECTION_POINTS=15`, `MAX_PARAMS_PER_POINT=5`, `HTTP_TIMEOUT=6`, `MODULE_DEADLINE_SECONDS=45`.
-- The module MUST NOT raise out to the worker — all network/parse errors are caught and logged.
+- Budgets are fixed (conservative): `MAX_PAGES_CRAWLED=10`, `MAX_INJECTION_POINTS=15`, `MAX_PARAMS_PER_POINT=5`, probe `HTTP_TIMEOUT=6`, `MODULE_DEADLINE_SECONDS=45`. (Shared `http_common.HTTP_TIMEOUT=8` is web_audit's default; the probe passes its own 6s.)
+- The probe module MUST NOT raise out to the worker — all network/parse errors are caught and logged.
 - Tests run with: `apps/api/venv/Scripts/python.exe -m pytest packages/scanner_core/tests/ -v` (run from repo root `C:\PROJECTS\easm`).
 - Commits: follow repo convention (`feat(scanner): ...`), NO `Co-Authored-By` trailer.
 
 ---
 
-### Task 1: Detectors, signatures, and payloads
+### Task 1: Shared HTTP helper + web_audit refactor
+
+**Files:**
+- Create: `packages/scanner_core/http_common.py`
+- Modify: `packages/scanner_core/web_audit.py` (remove local copies, import shared helpers)
+- Test: `packages/scanner_core/tests/test_http_common.py` (new)
+- Test: `packages/scanner_core/tests/test_web_audit.py` (new — regression guard for the refactor)
+
+**Interfaces:**
+- Consumes: `scanner_core.models.PortResult`.
+- Produces:
+  - `http_common.USER_AGENT: str`, `http_common.HTTP_PORTS: list[int]`, `http_common.HTTP_TIMEOUT: int` (=8)
+  - `http_common.base_urls(host: str, ports: Iterable[PortResult]) -> list[str]`
+  - `http_common.get(client: httpx.Client, url: str, headers: Optional[dict[str,str]] = None, timeout: float = HTTP_TIMEOUT) -> Optional[httpx.Response]`
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# packages/scanner_core/tests/test_http_common.py
+import httpx
+import respx
+
+from scanner_core import http_common
+from scanner_core.models import PortResult
+
+
+def test_base_urls_derives_http_endpoints_and_skips_non_http():
+    ports = [
+        PortResult(port=80, protocol="tcp", state="open", service="http"),
+        PortResult(port=443, protocol="tcp", state="open", service="https"),
+        PortResult(port=22, protocol="tcp", state="open", service="ssh"),
+    ]
+    bases = http_common.base_urls("example.com", ports)
+    assert "http://example.com:80" in bases
+    assert "https://example.com:443" in bases
+    assert all(":22" not in b for b in bases)
+
+
+@respx.mock
+def test_get_returns_none_on_transport_error():
+    respx.get("http://down.test/").mock(side_effect=httpx.ConnectError("boom"))
+    with httpx.Client() as client:
+        assert http_common.get(client, "http://down.test/") is None
+```
+
+```python
+# packages/scanner_core/tests/test_web_audit.py
+import httpx
+import respx
+
+from scanner_core.models import PortResult
+from scanner_core.web_audit import audit_web
+
+
+@respx.mock
+def test_audit_web_flags_directory_listing_after_refactor():
+    respx.get("http://h.test:80/").mock(
+        return_value=httpx.Response(200, text="<title>Index of /</title>")
+    )
+    respx.get(url__regex=r".*").mock(return_value=httpx.Response(404, text="nope"))
+    ports = [PortResult(port=80, protocol="tcp", state="open", service="http")]
+    findings = audit_web("h.test", ports)
+    assert any(f.title == "Directory listing enabled" for f in findings)
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `apps/api/venv/Scripts/python.exe -m pytest packages/scanner_core/tests/test_http_common.py packages/scanner_core/tests/test_web_audit.py -v`
+Expected: `test_http_common.py` FAILs with `ModuleNotFoundError: scanner_core.http_common`. `test_web_audit.py` may already PASS (web_audit currently works) — that is fine; it is the regression guard for Step 3/4.
+
+- [ ] **Step 3: Create the shared helper**
+
+```python
+# packages/scanner_core/http_common.py
+"""
+http_common.py
+--------------
+Shared HTTP helpers for the active web modules (web_audit, web_vuln_probe):
+base-URL derivation from discovered ports and a guarded GET. Keeping these in
+one place avoids duplicating the logic across modules.
+"""
+
+import logging
+from typing import Iterable, Optional
+
+import httpx
+
+try:
+    from .models import PortResult
+except ImportError:  # pragma: no cover
+    from models import PortResult
+
+logger = logging.getLogger(__name__)
+
+HTTP_TIMEOUT = 8
+USER_AGENT = "Mozilla/5.0 (compatible; EASM-Scanner/1.0)"
+HTTP_PORTS = [80, 443, 8080, 8443, 8000, 3000]
+
+
+def base_urls(host: str, ports: Iterable[PortResult]) -> list[str]:
+    """Derive scheme://host:port base URLs for the HTTP services among `ports`."""
+    seen: set[tuple[str, int]] = set()
+    urls: list[str] = []
+    for port in ports or []:
+        service = (port.service or "").lower()
+        is_http = service in {"http", "https", "http-alt", "ssl"} or port.port in HTTP_PORTS
+        if not is_http:
+            continue
+        use_tls = port.port in (443, 8443) or "ssl" in service or "https" in service
+        scheme = "https" if use_tls else "http"
+        key = (scheme, port.port)
+        if key in seen:
+            continue
+        seen.add(key)
+        urls.append(f"{scheme}://{host}:{port.port}")
+    return urls
+
+
+def get(
+    client: httpx.Client,
+    url: str,
+    headers: Optional[dict[str, str]] = None,
+    timeout: float = HTTP_TIMEOUT,
+) -> Optional[httpx.Response]:
+    """GET `url` without following redirects, swallowing transport errors."""
+    try:
+        return client.get(url, headers=headers, timeout=timeout, follow_redirects=False)
+    except (httpx.RequestError, OSError) as exc:
+        logger.debug("http_common: GET failed for %s: %s", url, exc)
+        return None
+```
+
+- [ ] **Step 4: Refactor `web_audit.py` onto the shared helper**
+
+In `packages/scanner_core/web_audit.py`:
+
+1. Replace the local constants block. Change:
+   ```python
+   HTTP_TIMEOUT = 8
+   USER_AGENT = "Mozilla/5.0 (compatible; EASM-Scanner/1.0)"
+   HTTP_PORTS = [80, 443, 8080, 8443, 8000, 3000]
+   MAX_BASE_URLS = 2  # bound path probing across services
+   ```
+   to:
+   ```python
+   from .http_common import USER_AGENT, base_urls, get
+   MAX_BASE_URLS = 2  # bound path probing across services
+   ```
+   (Place the `from .http_common import ...` near the existing `try/except` models import; keep `MAX_BASE_URLS` as a module constant. `HTTP_TIMEOUT` and `HTTP_PORTS` are no longer referenced in this file once the local `_base_urls`/`_get` are removed.)
+
+2. Delete the local `_base_urls(host, ports)` function (the whole `def _base_urls(...)` block).
+
+3. Delete the local `_get(client, url, headers=None)` function (the whole `def _get(...)` block).
+
+4. Replace call sites:
+   - In `_check_paths`: `resp = _get(client, base + path)` → `resp = get(client, base + path)`
+   - In `_check_root`: `resp = _get(client, base + "/")` → `resp = get(client, base + "/")`
+   - In `_check_root`: `cors = _get(client, base + "/", headers={"Origin": "https://evil.example"})` → `cors = get(client, base + "/", headers={"Origin": "https://evil.example"})`
+   - In `audit_web`: `bases = _base_urls(host, list(ports))[:MAX_BASE_URLS]` → `bases = base_urls(host, list(ports))[:MAX_BASE_URLS]`
+
+   (`USER_AGENT` is still referenced in `audit_web`'s `httpx.Client(... headers={"User-Agent": USER_AGENT})` and now comes from the import.)
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `apps/api/venv/Scripts/python.exe -m pytest packages/scanner_core/tests/test_http_common.py packages/scanner_core/tests/test_web_audit.py -v`
+Expected: PASS (3 tests).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/scanner_core/http_common.py packages/scanner_core/web_audit.py packages/scanner_core/tests/test_http_common.py packages/scanner_core/tests/test_web_audit.py
+git commit -m "refactor(scanner): extract shared http_common helper from web_audit"
+```
+
+---
+
+### Task 2: Probe detectors, signatures, and payloads
 
 **Files:**
 - Create: `packages/scanner_core/web_vuln_probe.py`
 - Test: `packages/scanner_core/tests/test_web_vuln_probe.py`
 
 **Interfaces:**
-- Consumes: nothing.
+- Consumes: `scanner_core.models.Finding`.
 - Produces:
-  - `SQL_ERROR_RE`, `LFI_RE` (compiled regexes)
-  - `XSS_PAYLOAD: str`, `CMD_MARKER: str`, `SQLI_PAYLOADS`, `LFI_PAYLOADS`, `OPEN_REDIRECT_PAYLOAD`, `CMD_PAYLOADS`
+  - Constants: `HTTP_TIMEOUT=6`, `MAX_BASE_URLS=2`, `MAX_PAGES_CRAWLED=10`, `MAX_INJECTION_POINTS=15`, `MAX_PARAMS_PER_POINT=5`, `MODULE_DEADLINE_SECONDS=45`
+  - `SQL_ERROR_RE`, `LFI_RE` (compiled regexes); `XSS_PAYLOAD: str`, `CMD_MARKER: str`, `SQLI_PAYLOADS`, `LFI_PAYLOADS`, `OPEN_REDIRECT_PAYLOAD`, `CMD_PAYLOADS`
   - `_detect_sqli(baseline_body: str, injected_body: str) -> bool`
   - `_detect_xss(injected_body: str, payload: str) -> bool`
   - `_detect_lfi(injected_body: str) -> bool`
@@ -100,29 +277,21 @@ to find injectable inputs (query params, form fields) and tests each for:
 
 All payloads are non-destructive. Hard page/request caps plus a wall-clock
 deadline keep the module well inside the scan budget. It never raises to the
-worker.
+worker. Shared HTTP helpers come from http_common.
 """
 
 import logging
 import re
-import time
-from dataclasses import dataclass
-from html.parser import HTMLParser
-from typing import Iterable, Optional
-from urllib.parse import parse_qsl, urljoin, urlparse
-
-import httpx
+from typing import Optional
 
 try:
-    from .models import Finding, PortResult
+    from .models import Finding
 except ImportError:  # pragma: no cover
-    from models import Finding, PortResult
+    from models import Finding
 
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 6
-USER_AGENT = "Mozilla/5.0 (compatible; EASM-Scanner/1.0)"
-HTTP_PORTS = [80, 443, 8080, 8443, 8000, 3000]
 MAX_BASE_URLS = 2
 MAX_PAGES_CRAWLED = 10
 MAX_INJECTION_POINTS = 15
@@ -198,7 +367,7 @@ git commit -m "feat(scanner): add web_vuln_probe detectors and payloads"
 
 ---
 
-### Task 2: HTML input extractor
+### Task 3: HTML input extractor
 
 **Files:**
 - Modify: `packages/scanner_core/web_vuln_probe.py`
@@ -242,8 +411,15 @@ Expected: FAIL — `AttributeError: module ... has no attribute '_InputExtractor
 
 - [ ] **Step 3: Write minimal implementation**
 
+Add the import at the top of `web_vuln_probe.py` (with the other stdlib imports):
+
 ```python
-# add to packages/scanner_core/web_vuln_probe.py (after the detectors)
+from html.parser import HTMLParser
+```
+
+Then add the class (after the detector functions):
+
+```python
 class _InputExtractor(HTMLParser):
     """Collect anchor hrefs and form definitions from an HTML document."""
 
@@ -292,19 +468,17 @@ git commit -m "feat(scanner): add HTML input extractor for web_vuln_probe"
 
 ---
 
-### Task 3: Base URLs, budget, and injection-point discovery
+### Task 4: Budget and injection-point discovery
 
 **Files:**
 - Modify: `packages/scanner_core/web_vuln_probe.py`
 - Test: `packages/scanner_core/tests/test_web_vuln_probe.py`
 
 **Interfaces:**
-- Consumes: `_InputExtractor` (Task 2), `MAX_*` constants (Task 1).
+- Consumes: `_InputExtractor` (Task 3); `MAX_*` constants (Task 2); `http_common.get` (Task 1).
 - Produces:
   - `@dataclass InjectionPoint(url: str, method: str, params: dict[str, str])`
   - `@dataclass _Budget(deadline: float, pages_left: int)` with `expired() -> bool`
-  - `_base_urls(host: str, ports: Iterable[PortResult]) -> list[str]`
-  - `_get(client: httpx.Client, url: str) -> Optional[httpx.Response]`
   - `_discover_inputs(client: httpx.Client, bases: list[str], budget: _Budget) -> list[InjectionPoint]`
 
 - [ ] **Step 1: Write the failing test**
@@ -312,23 +486,13 @@ git commit -m "feat(scanner): add HTML input extractor for web_vuln_probe"
 ```python
 # append to packages/scanner_core/tests/test_web_vuln_probe.py
 import time
+
 import httpx
 import respx
 
 
 def _budget():
     return wvp._Budget(deadline=time.monotonic() + 30, pages_left=wvp.MAX_PAGES_CRAWLED)
-
-
-def test_base_urls_derives_http_endpoints():
-    from scanner_core.models import PortResult
-    ports = [
-        PortResult(port=80, protocol="tcp", state="open", service="http"),
-        PortResult(port=22, protocol="tcp", state="open", service="ssh"),
-    ]
-    bases = wvp._base_urls("example.com", ports)
-    assert "http://example.com:80" in bases
-    assert all("22" not in b for b in bases)
 
 
 @respx.mock
@@ -339,9 +503,7 @@ def test_discover_inputs_finds_query_links_and_forms_same_host_only():
     <form action="/search.php" method="post"><input name="q"></form>
     """
     respx.get("http://t.test:80").mock(return_value=httpx.Response(200, text=root))
-    respx.get("http://t.test:80/list.php").mock(return_value=httpx.Response(200, text="ok"))
-    respx.post("http://t.test:80/search.php").mock(return_value=httpx.Response(200, text="ok"))
-    respx.get(url__regex=r".*").mock(return_value=httpx.Response(200, text="ok"))
+    respx.get(url__regex=r"http://t\.test:80/.*").mock(return_value=httpx.Response(200, text="ok"))
 
     with httpx.Client() as client:
         points = wvp._discover_inputs(client, ["http://t.test:80"], _budget())
@@ -351,21 +513,50 @@ def test_discover_inputs_finds_query_links_and_forms_same_host_only():
     assert ("POST", "http://t.test:80/search.php") in urls
     # off-host link must not become an injection point
     assert all("other.test" not in p.url for p in points)
+
+
+@respx.mock
+def test_discover_inputs_respects_page_budget():
+    # Every page links to a fresh unvisited page; with pages_left=1 only the
+    # first page is fetched, so its links are discovered but none are crawled.
+    respx.get(url__regex=r".*").mock(
+        return_value=httpx.Response(200, text='<a href="/next.php?p=1">n</a>')
+    )
+    budget = wvp._Budget(deadline=time.monotonic() + 30, pages_left=1)
+    with httpx.Client() as client:
+        wvp._discover_inputs(client, ["http://b.test:80"], budget)
+    assert budget.pages_left == 0
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `apps/api/venv/Scripts/python.exe -m pytest packages/scanner_core/tests/test_web_vuln_probe.py -k "base_urls or discover_inputs" -v`
-Expected: FAIL — `AttributeError` (`_Budget`/`_base_urls`/`_discover_inputs` not defined).
+Run: `apps/api/venv/Scripts/python.exe -m pytest packages/scanner_core/tests/test_web_vuln_probe.py -k "discover_inputs" -v`
+Expected: FAIL — `AttributeError` (`_Budget`/`_discover_inputs` not defined).
 
 - [ ] **Step 3: Write minimal implementation**
 
+Add these imports at the top of `web_vuln_probe.py` (extend the existing import block):
+
 ```python
-# add to packages/scanner_core/web_vuln_probe.py (after _InputExtractor)
+import time
+from dataclasses import dataclass
+from typing import Iterable, Optional   # extend existing "from typing import Optional"
+from urllib.parse import parse_qsl, urljoin, urlparse
+
+import httpx
+
+from .http_common import get   # alongside the models import; mirror the try/except if needed
+```
+
+> Note: `web_vuln_probe` lives in the same package as `http_common`, so `from .http_common import get` works under the normal import path. Keep the existing `try/except` models import pattern; the `http_common` import can sit directly below it.
+
+Then add (after `_InputExtractor`):
+
+```python
 @dataclass
 class InjectionPoint:
-    url: str               # URL without query (GET) or form action (POST)
-    method: str            # "GET" | "POST"
+    url: str                # URL without query (GET) or form action (POST)
+    method: str             # "GET" | "POST"
     params: dict[str, str]  # param name -> baseline value
 
 
@@ -376,32 +567,6 @@ class _Budget:
 
     def expired(self) -> bool:
         return time.monotonic() >= self.deadline
-
-
-def _base_urls(host: str, ports: Iterable[PortResult]) -> list[str]:
-    seen: set[tuple[str, int]] = set()
-    urls: list[str] = []
-    for port in ports or []:
-        service = (port.service or "").lower()
-        is_http = service in {"http", "https", "http-alt", "ssl"} or port.port in HTTP_PORTS
-        if not is_http:
-            continue
-        use_tls = port.port in (443, 8443) or "ssl" in service or "https" in service
-        scheme = "https" if use_tls else "http"
-        key = (scheme, port.port)
-        if key in seen:
-            continue
-        seen.add(key)
-        urls.append(f"{scheme}://{host}:{port.port}")
-    return urls
-
-
-def _get(client: httpx.Client, url: str) -> Optional[httpx.Response]:
-    try:
-        return client.get(url, timeout=HTTP_TIMEOUT, follow_redirects=False)
-    except (httpx.RequestError, OSError) as exc:
-        logger.debug("web_vuln_probe: GET failed for %s: %s", url, exc)
-        return None
 
 
 def _discover_inputs(client: httpx.Client, bases: list[str], budget: _Budget) -> list[InjectionPoint]:
@@ -432,7 +597,7 @@ def _discover_inputs(client: httpx.Client, bases: list[str], budget: _Budget) ->
                 continue
             visited.add(current)
             budget.pages_left -= 1
-            resp = _get(client, current)
+            resp = get(client, current, timeout=HTTP_TIMEOUT)
             if resp is None:
                 continue
 
@@ -469,7 +634,7 @@ def _discover_inputs(client: httpx.Client, bases: list[str], budget: _Budget) ->
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `apps/api/venv/Scripts/python.exe -m pytest packages/scanner_core/tests/test_web_vuln_probe.py -k "base_urls or discover_inputs" -v`
+Run: `apps/api/venv/Scripts/python.exe -m pytest packages/scanner_core/tests/test_web_vuln_probe.py -k "discover_inputs" -v`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Commit**
@@ -481,17 +646,18 @@ git commit -m "feat(scanner): add bounded injection-point discovery to web_vuln_
 
 ---
 
-### Task 4: Probing engine and public entrypoint
+### Task 5: Probing engine and public entrypoint
 
 **Files:**
 - Modify: `packages/scanner_core/web_vuln_probe.py`
 - Test: `packages/scanner_core/tests/test_web_vuln_probe.py`
 
 **Interfaces:**
-- Consumes: `InjectionPoint`, `_Budget`, `_base_urls`, `_discover_inputs`, all detectors and payloads.
+- Consumes: `InjectionPoint`, `_Budget`, `_discover_inputs` (Task 4); all detectors/payloads (Task 2); `http_common.base_urls` and `http_common.USER_AGENT` (Task 1).
 - Produces:
   - `_finding(title, severity, target, evidence, remediation) -> Finding`
   - `_request(client, url, method, params) -> Optional[httpx.Response]`
+  - `_mutate(params: dict[str,str], name: str, value: str) -> dict[str,str]`
   - `_probe_point(client, point: InjectionPoint, budget: _Budget) -> list[Finding]`
   - `probe_web_vulns(host: str, ports: Iterable[PortResult]) -> list[Finding]`
 
@@ -500,15 +666,14 @@ git commit -m "feat(scanner): add bounded injection-point discovery to web_vuln_
 ```python
 # append to packages/scanner_core/tests/test_web_vuln_probe.py
 @respx.mock
-def test_probe_web_vulns_flags_sqli_and_clean_endpoint_yields_nothing():
+def test_probe_web_vulns_flags_sqli():
     from scanner_core.models import PortResult
 
     MYSQL_ERR = "You have an error in your SQL syntax; check the manual"
 
     def vuln_handler(request):
         # SQL error only when a single quote is present in the cat param.
-        cat = request.url.params.get("cat", "")
-        if "'" in cat:
+        if "'" in request.url.params.get("cat", ""):
             return httpx.Response(200, text=MYSQL_ERR)
         return httpx.Response(200, text="<html>products</html>")
 
@@ -535,6 +700,12 @@ def test_probe_web_vulns_clean_target_has_no_findings():
     respx.get("http://safe.test:80/p.php").mock(return_value=httpx.Response(200, text="all good"))
     ports = [PortResult(port=80, protocol="tcp", state="open", service="http")]
     assert wvp.probe_web_vulns("safe.test", ports) == []
+
+
+def test_probe_web_vulns_returns_empty_without_http_ports():
+    from scanner_core.models import PortResult
+    ports = [PortResult(port=22, protocol="tcp", state="open", service="ssh")]
+    assert wvp.probe_web_vulns("nohttp.test", ports) == []
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -544,8 +715,15 @@ Expected: FAIL — `AttributeError: ... 'probe_web_vulns'`.
 
 - [ ] **Step 3: Write minimal implementation**
 
+Extend the `http_common` import at the top of `web_vuln_probe.py` to also bring in `base_urls` and `USER_AGENT`:
+
 ```python
-# add to packages/scanner_core/web_vuln_probe.py (after _discover_inputs)
+from .http_common import USER_AGENT, base_urls, get
+```
+
+Then add (after `_discover_inputs`):
+
+```python
 def _finding(title: str, severity: str, target: str, evidence: str, remediation: str) -> Finding:
     return Finding(
         title=title,
@@ -578,7 +756,6 @@ def _mutate(params: dict[str, str], name: str, value: str) -> dict[str, str]:
 def _probe_point(client: httpx.Client, point: InjectionPoint, budget: _Budget) -> list[Finding]:
     findings: list[Finding] = []
     names = list(point.params)[:MAX_PARAMS_PER_POINT]
-    where = f"{point.method} {point.url} (param {{name}})"
 
     baseline = _request(client, point.url, point.method, point.params)
     baseline_body = (baseline.text if baseline is not None else "") or ""
@@ -645,7 +822,7 @@ def _probe_point(client: httpx.Client, point: InjectionPoint, budget: _Budget) -
 
 def probe_web_vulns(host: str, ports: Iterable[PortResult]) -> list[Finding]:
     """Actively probe the host's HTTP services for injection-class vulnerabilities."""
-    bases = _base_urls(host, list(ports))[:MAX_BASE_URLS]
+    bases = base_urls(host, list(ports))[:MAX_BASE_URLS]
     if not bases:
         return []
     budget = _Budget(deadline=time.monotonic() + MODULE_DEADLINE_SECONDS, pages_left=MAX_PAGES_CRAWLED)
@@ -668,10 +845,12 @@ def probe_web_vulns(host: str, ports: Iterable[PortResult]) -> list[Finding]:
     return result
 ```
 
+> The `PortResult` type used in the `probe_web_vulns` signature is already available via the `from .models import Finding` block — extend that import to `from .models import Finding, PortResult` (and the `except ImportError` fallback to `from models import Finding, PortResult`).
+
 - [ ] **Step 4: Run the full module test suite to verify it passes**
 
 Run: `apps/api/venv/Scripts/python.exe -m pytest packages/scanner_core/tests/test_web_vuln_probe.py -v`
-Expected: PASS (all tests, including the two new probe tests).
+Expected: PASS (all tests, including the three new probe tests).
 
 - [ ] **Step 5: Commit**
 
@@ -682,14 +861,14 @@ git commit -m "feat(scanner): add probing engine and probe_web_vulns entrypoint"
 
 ---
 
-### Task 5: Wire `web_vuln_probe` into the scan pipeline
+### Task 6: Wire `web_vuln_probe` into the scan pipeline
 
 **Files:**
 - Modify: `apps/api/constants.py` (the `MODULE_ORDER` list)
 - Modify: `apps/api/workers/scan_worker.py` (import + guarded module block)
 
 **Interfaces:**
-- Consumes: `probe_web_vulns` (Task 4).
+- Consumes: `probe_web_vulns` (Task 5).
 - Produces: `"web_vuln_probe"` present in `MODULE_ORDER`; worker executes it after `web_audit`.
 
 - [ ] **Step 1: Add the module to `MODULE_ORDER`**
@@ -712,7 +891,7 @@ from scanner_core.web_vuln_probe import probe_web_vulns
 
 - [ ] **Step 3: Add the guarded module block**
 
-In `apps/api/workers/scan_worker.py`, immediately after the `web_audit` block and its `_aborted(...)` check (after the lines that end the `if "web_audit" in allowed_modules:` block), insert:
+In `apps/api/workers/scan_worker.py`, immediately after the `web_audit` block and its `_aborted(...)` check (after the lines that end the `if "web_audit" in allowed_modules:` block and the `aborted = _aborted(...)` / `if aborted: return ...` that follows it), insert:
 
 ```python
         if "web_vuln_probe" in allowed_modules:
@@ -752,7 +931,7 @@ git commit -m "feat(scanner): wire web_vuln_probe into the scan pipeline"
 
 ---
 
-### Task 6: Live smoke test (manual verification — optional but recommended)
+### Task 7: Live smoke test (manual verification — optional but recommended)
 
 **Files:** none (verification only).
 
@@ -775,17 +954,18 @@ Confirm the call returns within ~`MODULE_DEADLINE_SECONDS` (45s) even on a slow 
 ## Self-Review
 
 **1. Spec coverage:**
-- Module + entrypoint `probe_web_vulns` → Tasks 1–4. ✓
-- Bounded crawler (links + forms, same-host, page cap) → Tasks 2–3. ✓
-- All five detector classes (SQLi, XSS, LFI, open redirect, cmd injection) with FP guards → Tasks 1 & 4. ✓
-- Budget/deadline (`MAX_PAGES_CRAWLED`, `MAX_INJECTION_POINTS`, `MAX_PARAMS_PER_POINT`, `HTTP_TIMEOUT`, `MODULE_DEADLINE_SECONDS`) → Task 1 constants, enforced in Tasks 3–4. ✓
-- Non-destructive payloads → Task 1 payload set. ✓
-- Never raises to worker (caught + logged) → `probe_web_vulns` try/except, `_get`/`_request` swallow errors → Task 3/4. ✓
-- Wiring into `MODULE_ORDER` after `web_audit` + worker block → Task 5. ✓
-- `category="web_vuln"`, `source="web_vuln_probe"` → `_finding` helper, Task 4. ✓
-- Tests (detectors, crawler, e2e respx, FP guards) → Tasks 1–4. ✓ (Budget/deadline is covered structurally; the e2e tests exercise the crawl+probe path. A dedicated cap test was folded into Task 3's discovery test via `MAX_INJECTION_POINTS`/page bounds.)
+- Shared HTTP helper (no duplication) → Task 1. ✓
+- Module + entrypoint `probe_web_vulns` → Tasks 2–5. ✓
+- Bounded crawler (links + forms, same-host, page cap) → Tasks 3–4. ✓
+- All five detector classes with FP guards → Tasks 2 & 5. ✓
+- Budget/deadline (`MAX_PAGES_CRAWLED`, `MAX_INJECTION_POINTS`, `MAX_PARAMS_PER_POINT`, probe `HTTP_TIMEOUT`, `MODULE_DEADLINE_SECONDS`) → Task 2 constants, enforced in Tasks 4–5; page-budget test in Task 4. ✓
+- Non-destructive payloads → Task 2 payload set. ✓
+- Never raises to worker → `probe_web_vulns` try/except, `http_common.get`/`_request` swallow errors → Tasks 1/5. ✓
+- Wiring into `MODULE_ORDER` after `web_audit` + worker block → Task 6. ✓
+- `category="web_vuln"`, `source="web_vuln_probe"` → `_finding` helper, Task 5. ✓
+- Tests (detectors, crawler, discovery+budget, e2e respx, FP guards, web_audit regression) → Tasks 1–5. ✓
 - Unauthenticated only / no frontend / no new deps → respected throughout. ✓
 
 **2. Placeholder scan:** No TBD/TODO; every code step has complete code; commands have expected output. ✓
 
-**3. Type consistency:** `_Budget(deadline, pages_left)`, `InjectionPoint(url, method, params)`, detector signatures, and `probe_web_vulns(host, ports)` are used identically across Tasks 3–5. `_finding(...)` argument order matches all call sites in Task 4. ✓
+**3. Type consistency:** `_Budget(deadline, pages_left)`, `InjectionPoint(url, method, params)`, detector signatures, `http_common.base_urls`/`get`, and `probe_web_vulns(host, ports)` are used identically across Tasks 1, 4, 5, 6. `_finding(...)` argument order matches all call sites in Task 5. The `http_common` import in `web_vuln_probe` is introduced in Task 4 (`get`) and extended in Task 5 (`USER_AGENT`, `base_urls`). ✓

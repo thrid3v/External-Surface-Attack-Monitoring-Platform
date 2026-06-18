@@ -40,13 +40,16 @@ def probe_web_vulns(host: str, ports: Iterable[PortResult]) -> list[Finding]
 ```
 
 It is placed in `MODULE_ORDER` immediately after `web_audit`, so the
-already-discovered HTTP ports are available and reused (same `_base_urls`
-derivation pattern as `web_audit`).
+already-discovered HTTP ports are available and reused.
+
+Base-URL derivation and the guarded GET are shared with `web_audit` via a new
+`scanner_core/http_common.py` (`base_urls()`, `get()`, and the HTTP constants),
+so the logic is defined once rather than duplicated across the two modules.
 
 ### Internal units
 
-1. **`_base_urls(host, ports)`** — derive `scheme://host:port` base URLs for HTTP
-   services (mirrors `web_audit`).
+1. **`http_common.base_urls(host, ports)`** — derive `scheme://host:port` base
+   URLs for HTTP services (shared with `web_audit`).
 
 2. **Bounded crawler — `_discover_inputs(client, bases, budget)`**
    - GET each base root, parse HTML with a stdlib `HTMLParser` subclass.
