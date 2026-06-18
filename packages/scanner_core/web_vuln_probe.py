@@ -18,13 +18,23 @@ worker. Shared HTTP helpers come from http_common.
 
 import logging
 import re
+import time
+from dataclasses import dataclass
 from html.parser import HTMLParser
-from typing import Optional
+from typing import Iterable, Optional
+from urllib.parse import parse_qsl, urljoin, urlparse
+
+import httpx
 
 try:
     from .models import Finding
 except ImportError:  # pragma: no cover
     from models import Finding
+
+try:
+    from .http_common import get
+except ImportError:  # pragma: no cover
+    from http_common import get
 
 logger = logging.getLogger(__name__)
 
@@ -122,3 +132,82 @@ class _InputExtractor(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag == "form":
             self._current_form = None
+
+
+@dataclass
+class InjectionPoint:
+    url: str                # URL without query (GET) or form action (POST)
+    method: str             # "GET" | "POST"
+    params: dict[str, str]  # param name -> baseline value
+
+
+@dataclass
+class _Budget:
+    deadline: float
+    pages_left: int
+
+    def expired(self) -> bool:
+        return time.monotonic() >= self.deadline
+
+
+def _discover_inputs(client: httpx.Client, bases: list[str], budget: _Budget) -> list[InjectionPoint]:
+    points: list[InjectionPoint] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+
+    def _add(url: str, method: str, params: dict[str, str]) -> None:
+        if not params or len(points) >= MAX_INJECTION_POINTS:
+            return
+        key = (url, method, tuple(sorted(params)))
+        if key in seen:
+            return
+        seen.add(key)
+        points.append(InjectionPoint(url=url, method=method, params=params))
+
+    for base in bases:
+        host = urlparse(base).netloc
+        to_visit = [base]
+        visited: set[str] = set()
+        while (
+            to_visit
+            and budget.pages_left > 0
+            and not budget.expired()
+            and len(points) < MAX_INJECTION_POINTS
+        ):
+            current = to_visit.pop(0)
+            if current in visited:
+                continue
+            visited.add(current)
+            budget.pages_left -= 1
+            resp = get(client, current, timeout=HTTP_TIMEOUT)
+            if resp is None:
+                continue
+
+            cur_parsed = urlparse(current)
+            cur_query = dict(parse_qsl(cur_parsed.query))
+            if cur_query:
+                _add(current.split("?")[0], "GET", cur_query)
+
+            extractor = _InputExtractor()
+            try:
+                extractor.feed(resp.text or "")
+            except Exception:  # pragma: no cover - defensive
+                continue
+
+            for href in extractor.links:
+                absolute = urljoin(current, href).split("#")[0]
+                parsed = urlparse(absolute)
+                if parsed.netloc != host:
+                    continue
+                if parsed.query:
+                    _add(absolute.split("?")[0], "GET", dict(parse_qsl(parsed.query)))
+                if absolute not in visited and absolute not in to_visit and len(to_visit) < MAX_PAGES_CRAWLED:
+                    to_visit.append(absolute)
+
+            for form in extractor.forms:
+                action = urljoin(current, form["action"]) if form["action"] else current
+                if urlparse(action).netloc != host:
+                    continue
+                method = "POST" if form["method"] == "post" else "GET"
+                if form["fields"]:
+                    _add(action.split("?")[0], method, dict(form["fields"]))
+    return points

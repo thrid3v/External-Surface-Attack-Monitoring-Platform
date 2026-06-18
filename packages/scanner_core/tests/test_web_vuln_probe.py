@@ -1,3 +1,8 @@
+import time
+
+import httpx
+import respx
+
 from scanner_core import web_vuln_probe as wvp
 
 
@@ -53,3 +58,40 @@ def test_input_extractor_collects_links_and_forms():
     assert form["action"] == "/search.php"
     assert form["method"] == "post"
     assert set(form["fields"]) == {"q", "note", "csrf"}
+
+
+def _budget():
+    return wvp._Budget(deadline=time.monotonic() + 30, pages_left=wvp.MAX_PAGES_CRAWLED)
+
+
+@respx.mock
+def test_discover_inputs_finds_query_links_and_forms_same_host_only():
+    root = """
+    <a href="/list.php?cat=1">x</a>
+    <a href="https://other.test/evil?z=1">offsite</a>
+    <form action="/search.php" method="post"><input name="q"></form>
+    """
+    respx.get("http://t.test:80").mock(return_value=httpx.Response(200, text=root))
+    respx.get(url__regex=r"http://t\.test:80/.*").mock(return_value=httpx.Response(200, text="ok"))
+
+    with httpx.Client() as client:
+        points = wvp._discover_inputs(client, ["http://t.test:80"], _budget())
+
+    urls = {(p.method, p.url) for p in points}
+    assert ("GET", "http://t.test:80/list.php") in urls
+    assert ("POST", "http://t.test:80/search.php") in urls
+    # off-host link must not become an injection point
+    assert all("other.test" not in p.url for p in points)
+
+
+@respx.mock
+def test_discover_inputs_respects_page_budget():
+    # Every page links to a fresh unvisited page; with pages_left=1 only the
+    # first page is fetched, so its links are discovered but none are crawled.
+    respx.get(url__regex=r".*").mock(
+        return_value=httpx.Response(200, text='<a href="/next.php?p=1">n</a>')
+    )
+    budget = wvp._Budget(deadline=time.monotonic() + 30, pages_left=1)
+    with httpx.Client() as client:
+        wvp._discover_inputs(client, ["http://b.test:80"], budget)
+    assert budget.pages_left == 0
