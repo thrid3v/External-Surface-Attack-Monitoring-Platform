@@ -27,14 +27,14 @@ from urllib.parse import parse_qsl, urljoin, urlparse
 import httpx
 
 try:
-    from .models import Finding
+    from .models import Finding, PortResult
 except ImportError:  # pragma: no cover
-    from models import Finding
+    from models import Finding, PortResult
 
 try:
-    from .http_common import get
+    from .http_common import USER_AGENT, base_urls, get
 except ImportError:  # pragma: no cover
-    from http_common import get
+    from http_common import USER_AGENT, base_urls, get
 
 logger = logging.getLogger(__name__)
 
@@ -211,3 +211,124 @@ def _discover_inputs(client: httpx.Client, bases: list[str], budget: _Budget) ->
                 if form["fields"]:
                     _add(action.split("?")[0], method, dict(form["fields"]))
     return points
+
+
+def _finding(title: str, severity: str, target: str, evidence: str, remediation: str) -> Finding:
+    return Finding(
+        title=title,
+        severity=severity,
+        category="web_vuln",
+        description=f"{title} detected via active parameter testing.",
+        target=target,
+        evidence=evidence,
+        remediation=remediation,
+        source="web_vuln_probe",
+    )
+
+
+def _request(client: httpx.Client, url: str, method: str, params: dict[str, str]) -> Optional[httpx.Response]:
+    try:
+        if method == "POST":
+            return client.post(url, data=params, timeout=HTTP_TIMEOUT, follow_redirects=False)
+        return client.get(url, params=params, timeout=HTTP_TIMEOUT, follow_redirects=False)
+    except (httpx.RequestError, OSError) as exc:
+        logger.debug("web_vuln_probe: %s %s failed: %s", method, url, exc)
+        return None
+
+
+def _mutate(params: dict[str, str], name: str, value: str) -> dict[str, str]:
+    out = dict(params)
+    out[name] = value
+    return out
+
+
+def _probe_point(client: httpx.Client, point: InjectionPoint, budget: _Budget) -> list[Finding]:
+    findings: list[Finding] = []
+    names = list(point.params)[:MAX_PARAMS_PER_POINT]
+
+    baseline = _request(client, point.url, point.method, point.params)
+    baseline_body = (baseline.text if baseline is not None else "") or ""
+
+    for name in names:
+        if budget.expired():
+            break
+        base_val = point.params.get(name) or ""
+        target_desc = f"{point.url} [{point.method} param: {name}]"
+
+        # SQLi (append metacharacter to the baseline value)
+        for payload in SQLI_PAYLOADS:
+            resp = _request(client, point.url, point.method, _mutate(point.params, name, base_val + payload))
+            if resp is not None and _detect_sqli(baseline_body, resp.text or ""):
+                findings.append(_finding(
+                    "SQL injection (error-based)", "HIGH", target_desc,
+                    f"DB error triggered by payload {payload!r} in '{name}'",
+                    "Use parameterised queries / prepared statements; never concatenate input into SQL.",
+                ))
+                break
+
+        # Reflected XSS
+        resp = _request(client, point.url, point.method, _mutate(point.params, name, XSS_PAYLOAD))
+        if resp is not None and _detect_xss(resp.text or "", XSS_PAYLOAD):
+            findings.append(_finding(
+                "Reflected XSS", "MEDIUM", target_desc,
+                f"Un-escaped marker reflected from '{name}'",
+                "Context-encode all user input on output; apply a strict Content-Security-Policy.",
+            ))
+
+        # Path traversal / LFI
+        for payload in LFI_PAYLOADS:
+            resp = _request(client, point.url, point.method, _mutate(point.params, name, payload))
+            if resp is not None and _detect_lfi(resp.text or ""):
+                findings.append(_finding(
+                    "Path traversal / LFI", "HIGH", target_desc,
+                    f"System file signature returned for payload {payload!r} in '{name}'",
+                    "Reject path separators; resolve and confine paths to an allowlisted directory.",
+                ))
+                break
+
+        # Open redirect
+        resp = _request(client, point.url, point.method, _mutate(point.params, name, OPEN_REDIRECT_PAYLOAD))
+        if resp is not None and _detect_open_redirect(resp.headers.get("location")):
+            findings.append(_finding(
+                "Open redirect", "MEDIUM", target_desc,
+                f"Location header points to attacker host via '{name}'",
+                "Validate redirect targets against an allowlist of internal paths/hosts.",
+            ))
+
+        # OS command injection
+        for payload in CMD_PAYLOADS:
+            resp = _request(client, point.url, point.method, _mutate(point.params, name, base_val + payload))
+            if resp is not None and _detect_cmd_injection(resp.text or ""):
+                findings.append(_finding(
+                    "OS command injection", "CRITICAL", target_desc,
+                    f"Arithmetic command result ({CMD_MARKER}) echoed for payload in '{name}'",
+                    "Never pass user input to a shell; use argument arrays and strict input validation.",
+                ))
+                break
+
+    return findings
+
+
+def probe_web_vulns(host: str, ports: Iterable[PortResult]) -> list[Finding]:
+    """Actively probe the host's HTTP services for injection-class vulnerabilities."""
+    bases = base_urls(host, list(ports))[:MAX_BASE_URLS]
+    if not bases:
+        return []
+    budget = _Budget(deadline=time.monotonic() + MODULE_DEADLINE_SECONDS, pages_left=MAX_PAGES_CRAWLED)
+    collected: list[Finding] = []
+    with httpx.Client(verify=False, headers={"User-Agent": USER_AGENT}, follow_redirects=False) as client:
+        try:
+            points = _discover_inputs(client, bases, budget)
+            for point in points:
+                if budget.expired():
+                    break
+                collected.extend(_probe_point(client, point, budget))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("web_vuln_probe: probe failed for %s: %s", host, exc)
+
+    deduped: dict[tuple[str, Optional[str]], Finding] = {}
+    for f in collected:
+        deduped[(f.title, f.target)] = f
+    result = list(deduped.values())
+    logger.info("web_vuln_probe: %d findings for %s", len(result), host)
+    return result

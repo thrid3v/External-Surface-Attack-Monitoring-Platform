@@ -95,3 +95,46 @@ def test_discover_inputs_respects_page_budget():
     with httpx.Client() as client:
         wvp._discover_inputs(client, ["http://b.test:80"], budget)
     assert budget.pages_left == 0
+
+
+@respx.mock
+def test_probe_web_vulns_flags_sqli():
+    from scanner_core.models import PortResult
+
+    MYSQL_ERR = "You have an error in your SQL syntax; check the manual"
+
+    def vuln_handler(request):
+        # SQL error only when a single quote is present in the cat param.
+        if "'" in request.url.params.get("cat", ""):
+            return httpx.Response(200, text=MYSQL_ERR)
+        return httpx.Response(200, text="<html>products</html>")
+
+    root_html = '<a href="/list.php?cat=1">items</a>'
+    respx.get("http://v.test:80/").mock(return_value=httpx.Response(200, text=root_html))
+    respx.get("http://v.test:80/list.php").mock(side_effect=vuln_handler)
+
+    ports = [PortResult(port=80, protocol="tcp", state="open", service="http")]
+    findings = wvp.probe_web_vulns("v.test", ports)
+
+    sqli = [f for f in findings if f.title.lower().startswith("sql")]
+    assert sqli, f"expected a SQLi finding, got {[f.title for f in findings]}"
+    assert sqli[0].severity == "HIGH"
+    assert sqli[0].category == "web_vuln"
+    assert sqli[0].source == "web_vuln_probe"
+
+
+@respx.mock
+def test_probe_web_vulns_clean_target_has_no_findings():
+    from scanner_core.models import PortResult
+    respx.get("http://safe.test:80/").mock(
+        return_value=httpx.Response(200, text='<a href="/p.php?id=1">x</a>')
+    )
+    respx.get("http://safe.test:80/p.php").mock(return_value=httpx.Response(200, text="all good"))
+    ports = [PortResult(port=80, protocol="tcp", state="open", service="http")]
+    assert wvp.probe_web_vulns("safe.test", ports) == []
+
+
+def test_probe_web_vulns_returns_empty_without_http_ports():
+    from scanner_core.models import PortResult
+    ports = [PortResult(port=22, protocol="tcp", state="open", service="ssh")]
+    assert wvp.probe_web_vulns("nohttp.test", ports) == []
