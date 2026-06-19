@@ -136,3 +136,27 @@ def test_generate_report_full_run(
     assert report.risk_score > 0
     assert len(report.cves) > 0
     assert report.severity_summary["critical"] == 1
+
+def test_generate_report_propagates_partial_flag():
+    """A budget-truncated scan finalises a report flagged partial, so the worker
+    can persist real results instead of discarding them."""
+    report = generate_report(
+        scan_id=str(uuid.uuid4()),
+        target="example.com",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        modules_run=["port_scanner", "cve_lookup"],
+        partial=True,
+        partial_reason="time budget (1200s) reached before dns_enum",
+    )
+    assert report.partial is True
+    assert report.partial_reason == "time budget (1200s) reached before dns_enum"
+
+
+def test_generate_report_defaults_to_not_partial():
+    report = generate_report(
+        scan_id=str(uuid.uuid4()),
+        target="example.com",
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    assert report.partial is False
+    assert report.partial_reason is None

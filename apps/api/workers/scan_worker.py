@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -42,7 +43,15 @@ from scanner_core.nuclei_scan import scan_with_nuclei
 load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-SCAN_TIMEOUT_SECONDS = int(os.getenv("SCAN_TIMEOUT", "300"))
+# Global per-scan time budget. The pipeline runs every module to completion;
+# accuracy/coverage is prioritised over speed, so this is generous. The worker
+# never *starts* a new module past this budget, then finalises a (partial)
+# report from whatever ran — a scan never returns empty due to a slow host.
+SCAN_TIMEOUT_SECONDS = int(os.getenv("SCAN_TIMEOUT", "1200"))
+# A module already in flight when the budget is reached still runs to its own
+# cap (the largest is nuclei at 240s); these slack windows keep Celery's hard
+# limit and the stuck-scan reaper from killing such a legitimately long scan.
+MODULE_OVERRUN_SLACK_SECONDS = 300
 
 # Initialise DB engine for worker process if available. Do not raise
 # here — allow the worker to start even if DATABASE_URL is not set.
@@ -62,9 +71,10 @@ celery_app.conf.update(
     enable_utc=True,
     # Hard/soft limits so a hung module (e.g. nmap on a huge range) can't run
     # forever. (Enforced via signals on prefork pools; on the Windows solo pool
-    # the in-task _maybe_fail_on_timeout check below is the active safeguard.)
-    task_soft_time_limit=SCAN_TIMEOUT_SECONDS + 30,
-    task_time_limit=SCAN_TIMEOUT_SECONDS + 60,
+    # the in-task budget check is the active safeguard.) Sized to allow one
+    # in-flight module to finish past the budget without Celery killing the task.
+    task_soft_time_limit=SCAN_TIMEOUT_SECONDS + MODULE_OVERRUN_SLACK_SECONDS - 30,
+    task_time_limit=SCAN_TIMEOUT_SECONDS + MODULE_OVERRUN_SLACK_SECONDS,
 )
 
 # Periodic dispatcher: every 5 minutes, enqueue any recurring scans that are due.
@@ -84,7 +94,9 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-REAP_BUFFER_SECONDS = 120
+# Reaper grace must exceed the budget overrun slack so it never reaps a scan
+# that is legitimately finishing a long in-flight module.
+REAP_BUFFER_SECONDS = MODULE_OVERRUN_SLACK_SECONDS + 60
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -123,18 +135,6 @@ def _set_module_running(db: Session, scan: Scan, module_name: str) -> None:
     logger.info("scan_worker: scan=%s starting_module=%s", scan.id, module_name)
 
 
-def _maybe_fail_on_timeout(db: Session, scan: Scan, start_time: float) -> bool:
-    elapsed = time.monotonic() - start_time
-    if elapsed > SCAN_TIMEOUT_SECONDS:
-        scan.status = "failed"
-        scan.error_message = f"Scan timed out after {elapsed:.1f} seconds"
-        scan.completed_at = _now()
-        _commit_scan(db, scan)
-        logger.error("scan_worker: scan=%s timed out after %s seconds", scan.id, elapsed)
-        return True
-    return False
-
-
 def _check_canceled(db: Session, scan: Scan) -> bool:
     """Return True if the scan has been canceled out-of-band, finalising it.
 
@@ -149,15 +149,6 @@ def _check_canceled(db: Session, scan: Scan) -> bool:
         logger.info("scan_worker: scan=%s canceled cooperatively", scan.id)
         return True
     return False
-
-
-def _aborted(db: Session, scan: Scan, start_time: float) -> str | None:
-    """Combined module-boundary guard: returns 'failed', 'canceled', or None."""
-    if _maybe_fail_on_timeout(db, scan, start_time):
-        return "failed"
-    if _check_canceled(db, scan):
-        return "canceled"
-    return None
 
 
 def _create_change_alerts(db: Session, scan: Scan, report) -> None:
@@ -227,6 +218,159 @@ def _create_change_alerts(db: Session, scan: Scan, report) -> None:
                 logger.exception("scan_worker: failed to enqueue delivery for alert=%s", alert.id)
 
 
+@dataclass
+class ScanContext:
+    """Mutable state shared across scan modules as the pipeline runs.
+
+    Each step reads what earlier steps produced and writes its own outputs here,
+    so the worker can run modules in a uniform loop and finalise a report from
+    whatever has been collected — even when the run is truncated by the budget.
+    """
+
+    target: str
+    port_range: str
+    ports: list = field(default_factory=list)
+    dns_records: list = field(default_factory=list)
+    subdomains: list = field(default_factory=list)
+    zone_transfer_vulnerable: bool = False
+    zone_transfer_records: list = field(default_factory=list)
+    osint: object | None = None
+    http_findings: list = field(default_factory=list)
+    findings: list = field(default_factory=list)
+    errors: dict[str, str] = field(default_factory=dict)
+    modules_run: list[str] = field(default_factory=list)
+
+
+def _step_port_scanner(ctx: ScanContext) -> None:
+    ctx.ports = scan_ports(ctx.target, ctx.port_range)
+    logger.info("scan_worker: port_scanner found %d ports", len(ctx.ports))
+
+
+def _step_cve_lookup(ctx: ScanContext) -> None:
+    for port in ctx.ports:
+        if getattr(port, "product", None) and getattr(port, "version", None):
+            port.cves = lookup_cves(port.product, port.version)
+
+
+def _step_dns_enum(ctx: ScanContext) -> None:
+    data = run_dns_enum(ctx.target)
+    if isinstance(data, dict):
+        ctx.dns_records = data.get("dns_records", [])
+        ctx.subdomains = data.get("subdomains", [])
+        ctx.zone_transfer_vulnerable = bool(data.get("zone_transfer_vulnerable"))
+        ctx.zone_transfer_records = data.get("zone_transfer_records", [])
+
+
+def _step_osint_fetcher(ctx: ScanContext) -> None:
+    ctx.osint = fetch_all(ctx.target)
+
+
+def _step_service_probe(ctx: ScanContext) -> None:
+    ctx.http_findings = probe_all_http_ports(ctx.target, ctx.ports)
+    ctx.findings.extend(audit_all_tls(ctx.target, ctx.ports))
+
+
+def _step_web_audit(ctx: ScanContext) -> None:
+    ctx.findings.extend(audit_web(ctx.target, ctx.ports))
+
+
+def _step_web_vuln_probe(ctx: ScanContext) -> None:
+    ctx.findings.extend(probe_web_vulns(ctx.target, ctx.ports))
+
+
+def _step_secret_scan(ctx: ScanContext) -> None:
+    ctx.findings.extend(scan_for_secrets(ctx.target, ctx.ports))
+
+
+def _step_takeover_check(ctx: ScanContext) -> None:
+    names = {getattr(s, "subdomain", None) for s in ctx.subdomains if getattr(s, "subdomain", None)}
+    if ctx.osint is not None and getattr(ctx.osint, "subdomains_from_certs", None):
+        names.update(ctx.osint.subdomains_from_certs)
+    names.add(ctx.target)
+    ctx.findings.extend(check_takeovers(sorted(n for n in names if n)))
+
+
+def _step_email_audit(ctx: ScanContext) -> None:
+    ctx.findings.extend(audit_email(ctx.target))
+
+
+def _step_nuclei_scan(ctx: ScanContext) -> None:
+    urls = [hf.url for hf in ctx.http_findings if getattr(hf, "url", None)]
+    ctx.findings.extend(scan_with_nuclei(urls))
+
+
+# Maps each MODULE_ORDER entry to the function that runs it against a ScanContext.
+# The worker iterates MODULE_ORDER and dispatches through this table, so a module
+# is added by appending to MODULE_ORDER and registering its step here.
+STEP_FUNCS = {
+    "port_scanner": _step_port_scanner,
+    "cve_lookup": _step_cve_lookup,
+    "dns_enum": _step_dns_enum,
+    "osint_fetcher": _step_osint_fetcher,
+    "service_probe": _step_service_probe,
+    "web_audit": _step_web_audit,
+    "web_vuln_probe": _step_web_vuln_probe,
+    "secret_scan": _step_secret_scan,
+    "takeover_check": _step_takeover_check,
+    "email_audit": _step_email_audit,
+    "nuclei_scan": _step_nuclei_scan,
+}
+
+
+def _finalize_report(
+    db: Session,
+    scan: Scan,
+    ctx: ScanContext,
+    *,
+    partial: bool = False,
+    partial_reason: str | None = None,
+) -> dict:
+    """Build, persist, and (when complete) alert on the scan report.
+
+    Single finalise path for both the normal end and a budget-truncated end, so
+    collected results are never discarded.
+    """
+    report = generate_report(
+        scan_id=scan.id,
+        target=ctx.target,
+        started_at=_format_datetime(scan.started_at),
+        ports=ctx.ports,
+        osint=ctx.osint,
+        dns_records=ctx.dns_records,
+        subdomains=ctx.subdomains,
+        zone_transfer_vulnerable=ctx.zone_transfer_vulnerable,
+        zone_transfer_records=ctx.zone_transfer_records,
+        http_findings=ctx.http_findings,
+        findings=ctx.findings,
+        modules_run=ctx.modules_run,
+        errors=ctx.errors,
+        partial=partial,
+        partial_reason=partial_reason,
+    )
+
+    scan.status = "complete"
+    scan.completed_at = _now()
+    scan.result_json = report.model_dump_json()
+    scan.risk_score = report.risk_score
+    scan.risk_label = report.risk_label
+    scan.current_module = None
+    _commit_scan(db, scan)
+
+    # Change-detection alerts diff against the previous complete scan; a truncated
+    # scan would emit spurious "resolved"/"closed port" alerts, so skip them.
+    if not partial:
+        try:
+            _create_change_alerts(db, scan, report)
+        except Exception:
+            logger.exception("scan_worker: scan=%s alert generation failed", scan.id)
+
+    logger.info(
+        "scan_worker: scan=%s complete partial=%s modules_run=%d",
+        scan.id, partial, len(ctx.modules_run),
+    )
+    return {"status": "complete", "partial": partial}
+
+
 @celery_app.task(
     bind=True,
     name="run_scan",
@@ -239,7 +383,7 @@ def run_scan(
     target: str,
     port_range: str = "1-1000",
     modules: list[str] | None = None,
-) -> dict[str, str]:
+) -> dict:
     allowed_modules = [m for m in (modules or MODULE_ORDER) if m in MODULE_ORDER]
     if not allowed_modules:
         allowed_modules = list(MODULE_ORDER)
@@ -259,212 +403,34 @@ def run_scan(
         _commit_scan(db, scan)
 
         start_time = time.monotonic()
-        ports: list = []
-        dns_records: list = []
-        subdomains: list = []
-        zone_transfer_vulnerable: bool = False
-        zone_transfer_records: list = []
-        osint = None
-        http_findings: list = []
-        findings: list = []
-        errors: dict[str, str] = {}
-        # Track which modules actually executed (regardless of success/failure).
-        modules_run: list[str] = []
+        ctx = ScanContext(target=target, port_range=port_range)
+        partial = False
+        partial_reason: str | None = None
 
-        if "port_scanner" in allowed_modules:
-            _set_module_running(db, scan, "port_scanner")
-            modules_run.append("port_scanner")
+        for name in MODULE_ORDER:
+            if name not in allowed_modules:
+                continue
+            # Cooperative cancel: stop cleanly at a module boundary.
+            if _check_canceled(db, scan):
+                return {"status": "canceled"}
+            # Global time budget: never *start* a module once the budget is spent.
+            # Whatever ran so far is still finalised below as a partial report, so a
+            # slow host yields populated results instead of a discarded "failed" scan.
+            elapsed = time.monotonic() - start_time
+            if elapsed > SCAN_TIMEOUT_SECONDS:
+                partial = True
+                partial_reason = f"time budget ({SCAN_TIMEOUT_SECONDS}s) reached before {name}"
+                logger.warning("scan_worker: scan=%s %s", scan_id, partial_reason)
+                break
+            _set_module_running(db, scan, name)
+            ctx.modules_run.append(name)
             try:
-                ports = scan_ports(target, port_range)
-                logger.info("scan_worker: scan=%s port_scanner found %d ports", scan_id, len(ports))
-            except Exception as exc:
-                errors["port_scanner"] = str(exc)
-                ports = []
+                STEP_FUNCS[name](ctx)
+            except Exception as exc:  # one module failing never sinks the scan
+                ctx.errors[name] = str(exc)
+                logger.exception("scan_worker: scan=%s module=%s failed", scan_id, name)
 
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "cve_lookup" in allowed_modules:
-            _set_module_running(db, scan, "cve_lookup")
-            modules_run.append("cve_lookup")
-            try:
-                for port in ports:
-                    if getattr(port, "product", None) and getattr(port, "version", None):
-                        port.cves = lookup_cves(port.product, port.version)
-                logger.info("scan_worker: scan=%s cve_lookup complete", scan_id)
-            except Exception as exc:
-                errors["cve_lookup"] = str(exc)
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "dns_enum" in allowed_modules:
-            _set_module_running(db, scan, "dns_enum")
-            modules_run.append("dns_enum")
-            try:
-                dns_data = run_dns_enum(target)
-                dns_records = dns_data.get("dns_records", []) if isinstance(dns_data, dict) else []
-                subdomains = dns_data.get("subdomains", []) if isinstance(dns_data, dict) else []
-                zone_transfer_vulnerable = bool(dns_data.get("zone_transfer_vulnerable")) if isinstance(dns_data, dict) else False
-                zone_transfer_records = dns_data.get("zone_transfer_records", []) if isinstance(dns_data, dict) else []
-                logger.info(
-                    "scan_worker: scan=%s dns_enum complete (zone_transfer_vulnerable=%s)",
-                    scan_id,
-                    zone_transfer_vulnerable,
-                )
-            except Exception as exc:
-                errors["dns_enum"] = str(exc)
-                dns_records = []
-                subdomains = []
-                zone_transfer_vulnerable = False
-                zone_transfer_records = []
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "osint_fetcher" in allowed_modules:
-            _set_module_running(db, scan, "osint_fetcher")
-            modules_run.append("osint_fetcher")
-            try:
-                osint = fetch_all(target)
-                logger.info("scan_worker: scan=%s osint_fetcher complete", scan_id)
-            except Exception as exc:
-                errors["osint_fetcher"] = str(exc)
-                osint = None
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "service_probe" in allowed_modules:
-            _set_module_running(db, scan, "service_probe")
-            modules_run.append("service_probe")
-            try:
-                http_findings = probe_all_http_ports(target, ports)
-                findings.extend(audit_all_tls(target, ports))
-                logger.info("scan_worker: scan=%s service_probe complete", scan_id)
-            except Exception as exc:
-                errors["service_probe"] = str(exc)
-                http_findings = []
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "web_audit" in allowed_modules:
-            _set_module_running(db, scan, "web_audit")
-            modules_run.append("web_audit")
-            try:
-                findings.extend(audit_web(target, ports))
-                logger.info("scan_worker: scan=%s web_audit found %d findings", scan_id, len(findings))
-            except Exception as exc:
-                errors["web_audit"] = str(exc)
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "web_vuln_probe" in allowed_modules:
-            _set_module_running(db, scan, "web_vuln_probe")
-            modules_run.append("web_vuln_probe")
-            try:
-                findings.extend(probe_web_vulns(target, ports))
-                logger.info("scan_worker: scan=%s web_vuln_probe found %d findings", scan_id, len(findings))
-            except Exception as exc:
-                errors["web_vuln_probe"] = str(exc)
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "secret_scan" in allowed_modules:
-            _set_module_running(db, scan, "secret_scan")
-            modules_run.append("secret_scan")
-            try:
-                findings.extend(scan_for_secrets(target, ports))
-                logger.info("scan_worker: scan=%s secret_scan found %d findings", scan_id, len(findings))
-            except Exception as exc:
-                errors["secret_scan"] = str(exc)
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "takeover_check" in allowed_modules:
-            _set_module_running(db, scan, "takeover_check")
-            modules_run.append("takeover_check")
-            try:
-                names = {getattr(s, "subdomain", None) for s in subdomains if getattr(s, "subdomain", None)}
-                if osint is not None and getattr(osint, "subdomains_from_certs", None):
-                    names.update(osint.subdomains_from_certs)
-                names.add(target)
-                findings.extend(check_takeovers(sorted(n for n in names if n)))
-            except Exception as exc:
-                errors["takeover_check"] = str(exc)
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "email_audit" in allowed_modules:
-            _set_module_running(db, scan, "email_audit")
-            modules_run.append("email_audit")
-            try:
-                findings.extend(audit_email(target))
-            except Exception as exc:
-                errors["email_audit"] = str(exc)
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        if "nuclei_scan" in allowed_modules:
-            _set_module_running(db, scan, "nuclei_scan")
-            modules_run.append("nuclei_scan")
-            try:
-                nuclei_urls = [hf.url for hf in http_findings if getattr(hf, "url", None)]
-                findings.extend(scan_with_nuclei(nuclei_urls))
-            except Exception as exc:
-                errors["nuclei_scan"] = str(exc)
-
-        aborted = _aborted(db, scan, start_time)
-        if aborted:
-            return {"status": aborted}
-
-        report = generate_report(
-            scan_id=scan_id,
-            target=target,
-            started_at=_format_datetime(scan.started_at),
-            ports=ports,
-            osint=osint,
-            dns_records=dns_records,
-            subdomains=subdomains,
-            zone_transfer_vulnerable=zone_transfer_vulnerable,
-            zone_transfer_records=zone_transfer_records,
-            http_findings=http_findings,
-            findings=findings,
-            modules_run=modules_run,
-            errors=errors,
-        )
-
-        scan.status = "complete"
-        scan.completed_at = _now()
-        scan.result_json = report.model_dump_json()
-        scan.risk_score = report.risk_score
-        scan.risk_label = report.risk_label
-        scan.current_module = None
-        _commit_scan(db, scan)
-
-        try:
-            _create_change_alerts(db, scan, report)
-        except Exception:
-            logger.exception("scan_worker: scan=%s alert generation failed", scan_id)
-
-        logger.info("scan_worker: scan=%s complete status=complete", scan_id)
-        return {"status": "complete"}
+        return _finalize_report(db, scan, ctx, partial=partial, partial_reason=partial_reason)
     except Exception as exc:
         if 'scan' in locals() and scan is not None:
             scan.status = "failed"

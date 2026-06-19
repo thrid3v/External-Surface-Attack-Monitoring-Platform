@@ -187,6 +187,8 @@ def generate_report(
     findings: Optional[list[Finding]] = None,
     modules_run: Optional[list[str]] = None,
     errors: Optional[dict[str, str]] = None,
+    partial: bool = False,
+    partial_reason: Optional[str] = None,
 ) -> ScanReport:
     """Assemble all scan module outputs into a final ScanReport."""
     try:
@@ -270,6 +272,8 @@ def generate_report(
             scan_duration_seconds=scan_duration_seconds,
             modules_run=actual_modules_run,
             errors=errors,
+            partial=partial,
+            partial_reason=partial_reason,
         )
         return report
     except Exception as exc:
@@ -294,6 +298,8 @@ def generate_report(
             scan_duration_seconds=None,
             modules_run=[],
             errors={**(errors or {}), "report_gen": str(exc)},
+            partial=partial,
+            partial_reason=partial_reason,
         )
 
 

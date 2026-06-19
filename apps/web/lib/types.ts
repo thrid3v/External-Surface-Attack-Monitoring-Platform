@@ -109,6 +109,8 @@ export interface ScanReport {
   scan_duration_seconds: number | null
   modules_run: string[]
   errors: Record<string, string>
+  partial?: boolean
+  partial_reason?: string | null
 }
 
 export interface DiffCve {
