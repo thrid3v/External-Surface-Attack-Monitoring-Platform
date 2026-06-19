@@ -159,6 +159,8 @@ class ScanReport(BaseModel):
     scan_duration_seconds: Optional[float] = Field(None, description="Scan duration in seconds")
     modules_run: list[str] = Field(default_factory=list, description="List of scanner modules executed")
     errors: dict[str, str] = Field(default_factory=dict, description="Errors encountered by module")
+    partial: bool = Field(False, description="True if the scan was finalized before all modules ran (e.g. the time budget was reached); results reflect only the modules in modules_run")
+    partial_reason: Optional[str] = Field(None, description="Why the scan was finalized early, when partial is True")
 
 
 if __name__ == "__main__":

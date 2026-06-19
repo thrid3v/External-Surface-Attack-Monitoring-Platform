@@ -73,6 +73,14 @@ DISCOVERY_TIMEOUT_SECONDS = 120
 # than burning the budget.
 VERSION_TIMEOUT_SECONDS = 60
 NMAP_MAX_RETRIES = 2
+# Discovery must make forward progress on hosts with many filtered ports
+# (firewalled internet targets). nmap's congestion control otherwise ramps too
+# slowly and a full 1-1000 sweep aborts at the host-timeout with zero results —
+# which surfaced as UNKNOWN-risk, empty reports for real hosts like testfire.net.
+# A floor packet rate plus a single retry keeps that sweep to a few seconds while
+# still reliably finding the open ports.
+DISCOVERY_MAX_RETRIES = 1
+DISCOVERY_MIN_RATE = 500
 # If discovery burns ~all of its host-timeout and still finds nothing, nmap
 # almost certainly aborted the host mid-scan — the result is unreliable rather
 # than a genuine "no open ports".
@@ -258,7 +266,7 @@ def scan_ports(target: str, port_range: str = DEFAULT_PORT_RANGE) -> list[PortRe
     # --- Phase 1: fast discovery (no version detection) ---------------------
     discovery_args = (
         f"-Pn -T4 --host-timeout {DISCOVERY_TIMEOUT_SECONDS}s "
-        f"--max-retries {NMAP_MAX_RETRIES}"
+        f"--max-retries {DISCOVERY_MAX_RETRIES} --min-rate {DISCOVERY_MIN_RATE}"
     )
     try:
         disc_data = scanner.scan(hosts=target, ports=port_range, arguments=discovery_args)

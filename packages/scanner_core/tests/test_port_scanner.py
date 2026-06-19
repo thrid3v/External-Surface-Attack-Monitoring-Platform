@@ -140,6 +140,23 @@ def test_version_phase_failure_keeps_discovered_ports():
         assert {p.port for p in result} == {80, 443}
 
 
+def test_discovery_args_force_forward_progress():
+    """Discovery must push packets fast enough to finish a full-range scan of a
+    heavily-filtered internet host within the host-timeout. Regression: scans of
+    real hosts (e.g. testfire.net) aborted at the 120s host-timeout and returned
+    zero ports, flipping the whole report to UNKNOWN risk."""
+    disc = {"scan": {"t": {"tcp": {80: {"state": "open", "name": "http"}}}}}
+    ver = {"scan": {"t": {"tcp": {80: {"state": "open", "name": "http"}}}}}
+    with patch("nmap.PortScanner") as mock_nmap:
+        scanner = MagicMock()
+        scanner.scan.side_effect = [disc, ver]
+        mock_nmap.return_value = scanner
+        scan_ports("t", "1-1000")
+        disc_args = scanner.scan.call_args_list[0].kwargs.get("arguments", "")
+        assert "--min-rate" in disc_args
+        assert "--max-retries 1" in disc_args
+
+
 def test_host_timeout_with_no_ports_raises_incomplete():
     """When nmap burns its whole host-timeout and finds nothing, that's an
     unreliable scan — raise so the caller records an error instead of scoring 0."""

@@ -256,6 +256,23 @@ export default function ResultsPage({ params }: PageProps) {
         </Card>
       ) : null}
 
+      {report.partial ? (
+        <Card className="border-amber/50 bg-amber/5">
+          <CardContent className="flex items-start gap-3 pt-6">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber" />
+            <div>
+              <p className="font-semibold text-amber">Partial scan</p>
+              <p className="text-sm text-muted-foreground">
+                {report.partial_reason || "The scan was finalized before every module ran."}{" "}
+                Results reflect only the modules that completed
+                {report.modules_run?.length ? ` (${report.modules_run.join(", ")})` : ""}; the risk
+                score may understate the target.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <RiskScore score={riskScore} label={riskLabel} severitySummary={severitySummary} target={target} />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
