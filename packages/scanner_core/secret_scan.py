@@ -121,7 +121,8 @@ def _scan_content(url: str, content: str) -> list[Finding]:
 
     for name, severity, pattern in SECRET_PATTERNS:
         for match in pattern.finditer(snippet):
-            redacted = _redact(match.group(0))
+            value = match.group(1) if match.groups() else match.group(0)
+            redacted = _redact(value)
             if redacted in reported:
                 continue
             reported.add(redacted)

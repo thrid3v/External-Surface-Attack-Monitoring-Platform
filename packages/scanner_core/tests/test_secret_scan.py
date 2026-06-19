@@ -144,3 +144,15 @@ def test_scan_for_secrets_returns_empty_without_http_ports():
     from scanner_core.models import PortResult
     ports = [PortResult(port=22, protocol="tcp", state="open", service="ssh")]
     assert ss.scan_for_secrets("nohttp.test", ports) == []
+
+
+def test_aws_secret_evidence_redacts_the_key_not_the_label():
+    content = 'aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"'
+    findings = ss._scan_content("http://t/conf.js", content)
+    f = next(f for f in findings if "AWS secret access key" in f.title)
+    ev = f.evidence or ""
+    # full key never stored
+    assert "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in ev
+    # evidence reflects the KEY's first4/last4, not the 'aws_secret' label
+    assert "wJal" in ev and "EKEY" in ev
+    assert "aws_secret" not in ev.lower()
