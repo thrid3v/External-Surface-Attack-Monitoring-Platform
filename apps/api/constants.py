@@ -16,6 +16,7 @@ MODULE_ORDER: list[str] = [
     "service_probe",
     "web_audit",
     "web_vuln_probe",
+    "secret_scan",
     "takeover_check",
     "email_audit",
     "nuclei_scan",
