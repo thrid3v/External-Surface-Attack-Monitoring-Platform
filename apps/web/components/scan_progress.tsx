@@ -1,138 +1,85 @@
-"use client";
+"use client"
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Check, Loader2, Minus } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
+import { cn } from "@/lib/utils"
 
+// Mirrors MODULE_ORDER in the backend (apps/api/constants.py).
 const MODULES = [
-  { key: "port_scanner", label: "Port scan" },
-  { key: "cve_lookup", label: "CVE lookup" },
-  { key: "dns_enum", label: "DNS enumeration" },
-  { key: "osint_fetcher", label: "OSINT fetch" },
-  { key: "service_probe", label: "Service probe" },
-  { key: "report_gen", label: "Generating report" },
-] as const;
-
-type ModuleKey = (typeof MODULES)[number]["key"];
-type ModuleStatus = "complete" | "running" | "pending";
+  { key: "port_scanner", label: "port scan" },
+  { key: "cve_lookup", label: "cve lookup" },
+  { key: "dns_enum", label: "dns enumeration" },
+  { key: "osint_fetcher", label: "osint fetch" },
+  { key: "service_probe", label: "service / tls probe" },
+  { key: "web_audit", label: "web exposure audit" },
+  { key: "takeover_check", label: "subdomain takeover" },
+  { key: "email_audit", label: "email posture" },
+  { key: "nuclei_scan", label: "nuclei templates" },
+]
 
 interface ScanProgressProps {
-  currentModule: string | null;
-  target: string;
-}
-
-function getModuleStatus(
-  moduleKey: ModuleKey,
-  moduleIndex: number,
-  currentIndex: number
-): ModuleStatus {
-  if (currentIndex === -1) return "pending";
-  if (moduleIndex < currentIndex) return "complete";
-  if (moduleKey === MODULES[currentIndex]?.key) return "running";
-  return "pending";
-}
-
-function ModuleStatusIcon({ status }: { status: ModuleStatus }) {
-  if (status === "complete") {
-    return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-green-100">
-        <Check className="h-3 w-3 text-green-600" strokeWidth={3} />
-      </span>
-    );
-  }
-  if (status === "running") {
-    return (
-      <span className="flex h-5 w-5 items-center justify-center">
-        <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-      </span>
-    );
-  }
-  return (
-    <span className="flex h-5 w-5 items-center justify-center">
-      <Minus className="h-4 w-4 text-gray-300" />
-    </span>
-  );
+  currentModule: string | null
+  target: string
 }
 
 export default function ScanProgress({ currentModule, target }: ScanProgressProps) {
-  const currentIndex = currentModule
-    ? MODULES.findIndex((m) => m.key === currentModule)
-    : -1;
-
-  const percentage =
-    currentIndex === -1 ? 0 : ((currentIndex + 1) / MODULES.length) * 100;
+  const currentIndex = currentModule ? MODULES.findIndex((m) => m.key === currentModule) : -1
+  const completed = currentIndex >= 0 ? currentIndex : 0
+  const percentage = Math.round((completed / MODULES.length) * 100)
 
   return (
-    <div className="flex min-h-[60vh] items-center justify-center p-4">
-      <Card className="w-full max-w-lg shadow-lg">
-        <CardContent className="flex flex-col gap-6 p-8">
-          {/* Header */}
-          <div className="flex flex-col gap-1">
-            <h2 className="text-xl font-semibold tracking-tight text-foreground">
-              Scanning{" "}
-              <span className="font-mono text-blue-600">{target}</span>
-              <span className="animate-pulse">…</span>
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              This usually takes 30–120 seconds
-            </p>
-          </div>
+    <Card>
+      <CardContent className="space-y-4 pt-2">
+        <div className="flex items-baseline gap-2">
+          <span className="text-phosphor-dim">$</span>
+          <span className="text-phosphor">easm scan</span>
+          <span className="text-cyan">{target}</span>
+          <span className="blink text-phosphor-bright">▋</span>
+        </div>
+        <p className="text-xs text-phosphor-dim">
+          running — typically 1–3 min. nmap may appear paused during the port sweep.
+        </p>
 
-          {/* Progress bar */}
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Progress</span>
-              <span>{Math.round(percentage)}%</span>
-            </div>
-            <Progress value={percentage} className="h-2" />
-          </div>
+        <div className="flex items-center gap-3">
+          <Progress value={percentage} className="h-2 flex-1" />
+          <span className="font-display text-lg tabular-nums text-phosphor">{percentage}%</span>
+        </div>
 
-          {/* Module list */}
-          <ul className="flex flex-col gap-3">
-            {MODULES.map((module, index) => {
-              const status = getModuleStatus(
-                module.key,
-                index,
-                currentIndex
-              );
+        <ul className="space-y-1 text-sm">
+          {MODULES.map((mod, index) => {
+            let state: "complete" | "running" | "pending" = "pending"
+            if (index < currentIndex) state = "complete"
+            else if (mod.key === currentModule) state = "running"
 
-              return (
-                <li
-                  key={module.key}
-                  className={`flex items-center gap-3 rounded-md px-3 py-2 transition-colors ${
-                    status === "running"
-                      ? "bg-blue-50"
-                      : status === "complete"
-                      ? "bg-green-50/60"
-                      : "bg-transparent"
-                  }`}
+            const marker =
+              state === "complete" ? "[ ok ]" : state === "running" ? "[>>>>]" : "[    ]"
+
+            return (
+              <li key={mod.key} className="flex items-center gap-3">
+                <span
+                  className={cn(
+                    "font-mono",
+                    state === "complete" && "text-phosphor",
+                    state === "running" && "text-phosphor-bright glow blink",
+                    state === "pending" && "text-phosphor-dim/40"
+                  )}
                 >
-                  <ModuleStatusIcon status={status} />
-                  <span
-                    className={`text-sm font-medium ${
-                      status === "running"
-                        ? "text-blue-700"
-                        : status === "complete"
-                        ? "text-green-700"
-                        : "text-muted-foreground"
-                    }`}
-                  >
-                    {module.label}
-                  </span>
-                  {status === "running" && (
-                    <span className="ml-auto text-xs font-medium text-blue-500">
-                      Running
-                    </span>
+                  {marker}
+                </span>
+                <span
+                  className={cn(
+                    state === "complete" && "text-phosphor-dim",
+                    state === "running" && "text-phosphor",
+                    state === "pending" && "text-phosphor-dim/40"
                   )}
-                  {status === "complete" && (
-                    <span className="ml-auto text-xs text-green-500">Done</span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </CardContent>
-      </Card>
-    </div>
-  );
+                >
+                  {mod.label}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      </CardContent>
+    </Card>
+  )
 }

@@ -29,3 +29,5 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+# celery beat runtime schedule files
+celerybeat-schedule*

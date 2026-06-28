@@ -1,181 +1,72 @@
-"use client";
+"use client"
 
-import { useEffect, useState } from "react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, useState } from "react"
+import { Card, CardContent } from "@/components/ui/card"
+import { RiskBadge } from "@/components/risk-badge"
+import { severityColor } from "@/lib/severity"
+import { cn } from "@/lib/utils"
 
-type SeverityLabel = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "MINIMAL";
+const STAT_ROWS = [
+  { key: "critical", label: "crit", sev: "CRITICAL" },
+  { key: "high", label: "high", sev: "HIGH" },
+  { key: "medium", label: "med", sev: "MEDIUM" },
+  { key: "low", label: "low", sev: "LOW" },
+]
 
 interface RiskScoreProps {
-  score: number;
-  label: SeverityLabel;
-  severitySummary: Record<string, number>;
-  target: string;
+  score: number
+  label: string
+  severitySummary: Record<string, number>
+  target: string
 }
 
-interface SeverityConfig {
-  textColor: string;
-  bgColor: string;
-  borderColor: string;
-  badgeClass: string;
-}
-
-const SEVERITY_CONFIG: Record<SeverityLabel, SeverityConfig> = {
-  CRITICAL: {
-    textColor: "text-red-500",
-    bgColor: "bg-red-50",
-    borderColor: "border-red-500",
-    badgeClass: "bg-red-100 text-red-700 border-red-200",
-  },
-  HIGH: {
-    textColor: "text-orange-500",
-    bgColor: "bg-orange-50",
-    borderColor: "border-orange-500",
-    badgeClass: "bg-orange-100 text-orange-700 border-orange-200",
-  },
-  MEDIUM: {
-    textColor: "text-yellow-500",
-    bgColor: "bg-yellow-50",
-    borderColor: "border-yellow-500",
-    badgeClass: "bg-yellow-100 text-yellow-700 border-yellow-200",
-  },
-  LOW: {
-    textColor: "text-blue-500",
-    bgColor: "bg-blue-50",
-    borderColor: "border-blue-500",
-    badgeClass: "bg-blue-100 text-blue-700 border-blue-200",
-  },
-  MINIMAL: {
-    textColor: "text-gray-500",
-    bgColor: "bg-gray-50",
-    borderColor: "border-gray-400",
-    badgeClass: "bg-gray-100 text-gray-700 border-gray-200",
-  },
-};
-
-interface StatBoxProps {
-  count: number;
-  severityLabel: string;
-  textColor: string;
-  bgColor: string;
-}
-
-function StatBox({ count, severityLabel, textColor, bgColor }: StatBoxProps) {
-  return (
-    <div
-      className={`flex flex-col items-center justify-center rounded-lg p-3 ${bgColor} min-w-[72px]`}
-    >
-      <span className={`text-3xl font-bold leading-none ${textColor}`}>
-        {count}
-      </span>
-      <span className="mt-1 text-xs font-medium uppercase tracking-wide text-gray-500">
-        {severityLabel}
-      </span>
-    </div>
-  );
-}
-
-const STAT_SEVERITIES: {
-  key: string;
-  label: string;
-  textColor: string;
-  bgColor: string;
-}[] = [
-  {
-    key: "critical",
-    label: "Critical",
-    textColor: "text-red-500",
-    bgColor: "bg-red-50",
-  },
-  {
-    key: "high",
-    label: "High",
-    textColor: "text-orange-500",
-    bgColor: "bg-orange-50",
-  },
-  {
-    key: "medium",
-    label: "Medium",
-    textColor: "text-yellow-500",
-    bgColor: "bg-yellow-50",
-  },
-  {
-    key: "low",
-    label: "Low",
-    textColor: "text-blue-500",
-    bgColor: "bg-blue-50",
-  },
-];
-
-export default function RiskScore({
-  score,
-  label,
-  severitySummary,
-  target,
-}: RiskScoreProps) {
-  const [displayScore, setDisplayScore] = useState(0);
-
-  const config = SEVERITY_CONFIG[label] ?? SEVERITY_CONFIG.MINIMAL;
+export default function RiskScore({ score, label, severitySummary, target }: RiskScoreProps) {
+  const [displayScore, setDisplayScore] = useState(0)
 
   useEffect(() => {
-    if (score === 0) {
-      setDisplayScore(0);
-      return;
-    }
-
-    const totalDuration = 800; // ms
-    const increment = 2;
-    const steps = Math.ceil(score / increment);
-    const intervalMs = totalDuration / steps;
-
-    let current = 0;
+    // Count up from 0 to `score`. (score === 0 resolves on the first tick, so
+    // no separate synchronous reset is needed.)
+    let current = 0
+    const step = Math.max(1, Math.ceil(score / 40))
     const timer = setInterval(() => {
-      current += increment;
-      if (current >= score) {
-        setDisplayScore(score);
-        clearInterval(timer);
-      } else {
-        setDisplayScore(current);
-      }
-    }, intervalMs);
+      current = Math.min(current + step, score)
+      setDisplayScore(current)
+      if (current >= score) clearInterval(timer)
+    }, 20)
+    return () => clearInterval(timer)
+  }, [score])
 
-    return () => clearInterval(timer);
-  }, [score]);
+  const c = severityColor(label)
 
   return (
-    <Card
-      className={`w-full overflow-hidden border-l-4 ${config.borderColor} shadow-md`}
-    >
-      <CardContent className="flex flex-col gap-6 p-6 sm:flex-row sm:items-center sm:justify-between">
-        {/* LEFT COLUMN */}
-        <div className="flex flex-col items-start gap-2">
-          <span
-            className={`text-8xl font-extrabold leading-none tracking-tight ${config.textColor}`}
-          >
-            {displayScore}
-          </span>
-          <Badge
-            variant="outline"
-            className={`mt-1 px-3 py-1 text-sm font-semibold uppercase tracking-wider ${config.badgeClass}`}
-          >
-            {label}
-          </Badge>
-          <p className="text-sm text-muted-foreground">{target}</p>
+    <Card className={cn("border-l-2", c.border)}>
+      <CardContent className="grid gap-6 pt-2 sm:grid-cols-[auto_1fr]">
+        <div>
+          <p className="text-xs text-phosphor-dim">{"// risk_score"}</p>
+          <p className={cn("font-display text-7xl leading-none tabular-nums glow-strong", c.text)}>
+            {String(displayScore).padStart(2, "0")}
+            <span className="text-2xl text-phosphor-dim">/100</span>
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <RiskBadge label={label} />
+            <span className="text-sm text-cyan">{target}</span>
+          </div>
         </div>
 
-        {/* RIGHT COLUMN */}
-        <div className="flex flex-wrap gap-3 sm:justify-end">
-          {STAT_SEVERITIES.map(({ key, label: statLabel, textColor, bgColor }) => (
-            <StatBox
-              key={key}
-              count={severitySummary[key] ?? 0}
-              severityLabel={statLabel}
-              textColor={textColor}
-              bgColor={bgColor}
-            />
-          ))}
+        <div className="grid grid-cols-2 gap-2 self-center sm:grid-cols-4">
+          {STAT_ROWS.map(({ key, label: sLabel, sev }) => {
+            const cc = severityColor(sev)
+            return (
+              <div key={key} className={cn("border p-3 text-center", cc.border)}>
+                <p className={cn("font-display text-3xl leading-none tabular-nums", cc.text)}>
+                  {severitySummary[key] ?? 0}
+                </p>
+                <p className="mt-1 text-[10px] uppercase tracking-[0.2em] text-phosphor-dim">{sLabel}</p>
+              </div>
+            )
+          })}
         </div>
       </CardContent>
     </Card>
-  );
+  )
 }

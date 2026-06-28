@@ -71,6 +71,7 @@ class SubdomainResult(BaseModel):
     subdomain: str = Field(..., description="Discovered subdomain, e.g. dev.example.com")
     ip_address: Optional[str] = Field(None, description="Resolved IP address for the subdomain")
     is_different_ip: bool = Field(False, description="True if subdomain IP differs from the main domain")
+    source: str = Field("dns_bruteforce", description="How the subdomain was discovered: dns_bruteforce | cert_transparency")
 
 
 class CertInfo(BaseModel):
@@ -114,6 +115,21 @@ class HttpFinding(BaseModel):
     cert: Optional[CertInfo] = Field(None, description="TLS certificate details for the endpoint")
 
 
+class Finding(BaseModel):
+    """A generic security finding that is not a versioned CVE — misconfigurations,
+    exposures, takeovers, weak TLS, template (nuclei) hits, etc."""
+
+    title: str = Field(..., description="Short finding title")
+    severity: str = Field(..., description="Severity label: CRITICAL|HIGH|MEDIUM|LOW|INFO")
+    category: str = Field(..., description="Finding category, e.g. web_exposure|tls|takeover|email|nuclei")
+    description: str = Field("", description="What the finding is and why it matters")
+    target: Optional[str] = Field(None, description="Affected URL, host, or subdomain")
+    evidence: Optional[str] = Field(None, description="Evidence supporting the finding")
+    remediation: Optional[str] = Field(None, description="Suggested remediation")
+    source: str = Field("", description="Module that produced the finding")
+    references: list[str] = Field(default_factory=list, description="Reference URLs")
+
+
 class ScanStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -132,14 +148,19 @@ class ScanReport(BaseModel):
     cves: list[CVEResult] = Field(default_factory=list, description="Deduplicated CVE findings across all ports")
     dns_records: list[DNSRecord] = Field(default_factory=list, description="Collected DNS records")
     subdomains: list[SubdomainResult] = Field(default_factory=list, description="Discovered subdomains")
+    zone_transfer_vulnerable: bool = Field(False, description="True if any authoritative name server allowed a DNS zone transfer (AXFR)")
+    zone_transfer_records: list[str] = Field(default_factory=list, description="Records exposed via zone transfer, if vulnerable")
     osint: Optional[OSINTResult] = Field(None, description="Aggregated OSINT findings")
     http_findings: list[HttpFinding] = Field(default_factory=list, description="HTTP and TLS probe results")
+    findings: list[Finding] = Field(default_factory=list, description="Non-CVE security findings (misconfig, exposure, takeover, TLS, nuclei)")
     top_findings: list[CVEResult] = Field(default_factory=list, description="Top CVE findings by score")
     started_at: Optional[str] = Field(None, description="Scan start timestamp")
     completed_at: Optional[str] = Field(None, description="Scan completion timestamp")
     scan_duration_seconds: Optional[float] = Field(None, description="Scan duration in seconds")
     modules_run: list[str] = Field(default_factory=list, description="List of scanner modules executed")
     errors: dict[str, str] = Field(default_factory=dict, description="Errors encountered by module")
+    partial: bool = Field(False, description="True if the scan was finalized before all modules ran (e.g. the time budget was reached); results reflect only the modules in modules_run")
+    partial_reason: Optional[str] = Field(None, description="Why the scan was finalized early, when partial is True")
 
 
 if __name__ == "__main__":

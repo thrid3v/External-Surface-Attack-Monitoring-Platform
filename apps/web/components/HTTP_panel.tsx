@@ -6,6 +6,7 @@ import { Check, ExternalLink, ChevronDown, ChevronUp, X } from "lucide-react"
 import { Badge } from "./ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card"
 import { cn } from "@/lib/utils"
+import type { CertInfo, HttpFinding } from "@/lib/types"
 
 const ALL_HEADERS = [
   "Content-Security-Policy",
@@ -16,55 +17,12 @@ const ALL_HEADERS = [
   "Permissions-Policy",
 ] as const
 
-export interface CertInfo {
-  issuer?: string | null
-  valid_from?: string | null
-  valid_to?: string | null
-  days_until_expiry?: number | null
-  tls_version?: string | null
-  is_expired?: boolean
-  sans?: string[] | null
-}
-
-export interface HttpFinding {
-  url: string
-  status_code: number
-  server_header?: string | null
-  powered_by?: string | null
-  cms_detected?: string | null
-  missing_headers: string[]
-  cert?: CertInfo | null
-}
-
 function statusBadgeProps(statusCode: number) {
-  if (statusCode === 200) {
-    return {
-      className:
-        "bg-emerald-100 text-emerald-900 border border-emerald-200",
-    }
-  }
-
-  if (statusCode === 301 || statusCode === 302) {
-    return {
-      className: "bg-sky-100 text-sky-900 border border-sky-200",
-    }
-  }
-
-  if (statusCode === 403) {
-    return {
-      className: "bg-amber-100 text-amber-900 border border-amber-200",
-    }
-  }
-
-  if (statusCode === 500) {
-    return {
-      variant: "destructive" as const,
-    }
-  }
-
-  return {
-    className: "bg-slate-100 text-slate-900 border border-slate-200",
-  }
+  if (statusCode === 200) return { className: "border-phosphor/50 text-phosphor" }
+  if (statusCode === 301 || statusCode === 302) return { className: "border-cyan/50 text-cyan" }
+  if (statusCode === 403) return { className: "border-amber/50 text-amber" }
+  if (statusCode === 500) return { variant: "destructive" as const }
+  return { className: "border-border text-phosphor-dim" }
 }
 
 function formatDate(value?: string | null) {
@@ -86,23 +44,14 @@ function certStatusBanner(cert: CertInfo | null) {
   if (!cert) return null
 
   if (cert.is_expired) {
-    return {
-      text: "Certificate EXPIRED",
-      className: "bg-destructive/10 text-destructive border border-destructive/20",
-    }
+    return { text: "cert EXPIRED", className: "border-red/50 text-red" }
   }
 
   if (cert.days_until_expiry !== null && cert.days_until_expiry !== undefined && cert.days_until_expiry < 30) {
-    return {
-      text: `Expires in ${cert.days_until_expiry} days`,
-      className: "bg-amber-100 text-amber-950 border border-amber-200",
-    }
+    return { text: `expires in ${cert.days_until_expiry}d`, className: "border-amber/50 text-amber" }
   }
 
-  return {
-    text: "Valid",
-    className: "bg-emerald-100 text-emerald-900 border border-emerald-200",
-  }
+  return { text: "valid", className: "border-phosphor/50 text-phosphor" }
 }
 
 function isTlsOutdated(version?: string | null) {
@@ -156,7 +105,7 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                 </a>
                 <ExternalLink className="h-4 w-4 text-muted-foreground" />
               </div>
-              <Badge className="rounded-full px-3 py-1 text-sm font-medium" {...statusBadgeProps(finding.status_code)}>
+              <Badge className="text-sm" {...statusBadgeProps(finding.status_code ?? 0)}>
                 {finding.status_code}
               </Badge>
             </CardHeader>
@@ -172,8 +121,8 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                   <div className="flex items-center justify-between gap-3">
                     <CardTitle className="text-sm">Server Info</CardTitle>
                     {finding.cms_detected ? (
-                      <Badge className="rounded-full px-2 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-900 border border-amber-200 bg-amber-100">
-                        CMS detected
+                      <Badge className="border-amber/50 text-amber">
+                        cms detected
                       </Badge>
                     ) : null}
                   </div>
@@ -196,7 +145,7 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                         </div>
                       ) : null}
                       {finding.cms_detected ? (
-                        <div className="rounded-2xl border border-amber-200 bg-amber-100 px-3 py-2 text-sm text-amber-950">
+                        <div className="border border-amber/40 bg-amber/5 px-3 py-2 text-sm text-amber">
                           {finding.cms_detected}
                         </div>
                       ) : null}
@@ -214,14 +163,14 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                       return (
                         <div key={header} className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-background px-3 py-2">
                           <span>{header}</span>
-                          <span className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold">
+                          <span className="inline-flex items-center gap-1 px-2 py-1 text-xs">
                             {present ? (
-                              <Check className="h-3.5 w-3.5 text-emerald-700" />
+                              <Check className="h-3.5 w-3.5 text-phosphor" />
                             ) : (
-                              <X className="h-3.5 w-3.5 text-destructive" />
+                              <X className="h-3.5 w-3.5 text-red" />
                             )}
-                            <span className={present ? "text-emerald-700" : "text-destructive"}>
-                              {present ? "Present" : "Missing"}
+                            <span className={present ? "text-phosphor" : "text-red"}>
+                              {present ? "present" : "missing"}
                             </span>
                           </span>
                         </div>
@@ -229,8 +178,8 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                     })}
                   </div>
                   {presentHeaders === ALL_HEADERS.length ? (
-                    <div className="rounded-2xl border border-emerald-200 bg-emerald-100 px-3 py-3 text-sm text-emerald-900">
-                      All security headers present
+                    <div className="border border-phosphor/40 bg-phosphor/5 px-3 py-3 text-sm text-phosphor">
+                      all security headers present
                     </div>
                   ) : (
                     <p className="text-sm text-muted-foreground">
@@ -244,7 +193,7 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                     <div className="flex items-center justify-between gap-3">
                       <CardTitle className="text-sm">TLS Certificate</CardTitle>
                       {certBanner ? (
-                        <Badge className={cn("rounded-full px-3 py-1 text-sm font-medium", certBanner.className)}>
+                        <Badge className={cn("text-sm", certBanner.className)}>
                           {certBanner.text}
                         </Badge>
                       ) : null}
@@ -273,8 +222,8 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                           Days until expiry: {cert.days_until_expiry ?? "Unknown"}
                         </span>
                         {tlsOutdated ? (
-                          <Badge variant="destructive" className="rounded-full px-2 py-1 text-xs font-semibold uppercase">
-                            Outdated TLS — upgrade to TLS 1.2+
+                          <Badge variant="destructive" className="text-xs">
+                            outdated TLS — upgrade to 1.2+
                           </Badge>
                         ) : null}
                       </div>
@@ -293,9 +242,9 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                               [finding.url]: !sanOpen,
                             }))
                           }
-                          className="inline-flex items-center gap-2 text-sm font-medium text-primary transition hover:text-primary/80"
+                          className="inline-flex items-center gap-2 text-sm text-cyan transition hover:underline"
                         >
-                          {sanOpen ? "Hide SANs" : "Show SANs"}
+                          {sanOpen ? "hide SANs" : "show SANs"}
                           {sanOpen ? (
                             <ChevronUp className="h-4 w-4" />
                           ) : (
@@ -304,9 +253,9 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
                         </button>
                         {sanOpen ? (
                           <div className="mt-3 space-y-2 rounded-2xl border border-border bg-background p-3 text-sm text-muted-foreground">
-                            {cert.sans && cert.sans.length ? (
+                            {cert.subject_alt_names && cert.subject_alt_names.length ? (
                               <ul className="list-disc space-y-1 pl-5">
-                                {cert.sans.map((san) => (
+                                {cert.subject_alt_names.map((san) => (
                                   <li key={san}>{san}</li>
                                 ))}
                               </ul>
@@ -330,9 +279,9 @@ function HttpPanel({ httpFindings }: { httpFindings: HttpFinding[] }) {
           <button
             type="button"
             onClick={() => setShowAll((current) => !current)}
-            className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-sm font-medium text-primary transition hover:bg-muted"
+            className="inline-flex items-center gap-2 border border-border px-3 py-1.5 text-sm text-phosphor-dim transition hover:border-phosphor/50 hover:text-phosphor"
           >
-            {showAll ? "Show less" : `Show ${httpFindings.length - 3} more`}
+            {showAll ? "show less" : `show ${httpFindings.length - 3} more`}
             {showAll ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
           </button>
         </div>

@@ -82,6 +82,10 @@ NVD_API_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_API_KEY = os.getenv("NVD_API_KEY")
 NVD_RATE_LIMIT_DELAY = 0.6
 REQUEST_TIMEOUT_SECONDS = 10
+# Bound the NVD response size and how many CVEs we keep per service so a broad
+# keyword match cannot flood a report with low-signal results.
+NVD_RESULTS_PER_PAGE = 50
+MAX_CVES_PER_SERVICE = 10
 # Maximum number of unique (service, version) pairs to cache per worker process.
 # Bounded to prevent indefinite memory growth in long-running Celery workers.
 _CVE_CACHE_MAX_SIZE = 512
@@ -171,6 +175,9 @@ def _parse_cve_item(item: dict[str, Any]) -> CVEResult | None:
             url = ref.get("url")
             if isinstance(url, str) and url:
                 references.append(url)
+    # NVD frequently lists the same reference URL more than once; dedup while
+    # preserving order.
+    references = list(dict.fromkeys(references))
 
     published_date = item.get("published") or item.get("publishedDate")
     return CVEResult(
@@ -184,19 +191,53 @@ def _parse_cve_item(item: dict[str, Any]) -> CVEResult | None:
     )
 
 
-def _query_nvd(keyword_search: str) -> list[CVEResult]:
-    """Query the NVD API and return parsed CVE results."""
-    params = {"keywordSearch": keyword_search}
+# Curated product -> (CPE vendor, CPE product) map for precise, version-aware
+# matching of the most common services. Unknown products fall back to keyword.
+CPE_MAP: dict[str, tuple[str, str]] = {
+    "apache httpd": ("apache", "http_server"),
+    "apache": ("apache", "http_server"),
+    "nginx": ("nginx", "nginx"),
+    "openssh": ("openbsd", "openssh"),
+    "mysql": ("oracle", "mysql"),
+    "mariadb": ("mariadb", "mariadb"),
+    "postgresql": ("postgresql", "postgresql"),
+    "microsoft iis": ("microsoft", "internet_information_services"),
+    "iis": ("microsoft", "internet_information_services"),
+    "vsftpd": ("vsftpd_project", "vsftpd"),
+    "proftpd": ("proftpd", "proftpd"),
+    "exim": ("exim", "exim"),
+    "postfix": ("postfix", "postfix"),
+    "dovecot": ("dovecot", "dovecot"),
+    "lighttpd": ("lighttpd", "lighttpd"),
+    "apache tomcat": ("apache", "tomcat"),
+    "tomcat": ("apache", "tomcat"),
+    "php": ("php", "php"),
+    "openssl": ("openssl", "openssl"),
+    "samba": ("samba", "samba"),
+    "bind": ("isc", "bind"),
+    "redis": ("redis", "redis"),
+    "mongodb": ("mongodb", "mongodb"),
+}
+
+
+def _cpe_for(service: str) -> tuple[str, str] | None:
+    """Best-effort map a service/product string to a CPE (vendor, product)."""
+    s = service.strip().lower()
+    if s in CPE_MAP:
+        return CPE_MAP[s]
+    for key, value in CPE_MAP.items():
+        if key in s or s in key:
+            return value
+    return None
+
+
+def _nvd_request(params: dict[str, object], product_token: str, label: str) -> list[CVEResult]:
+    """Shared NVD request + parse + product filter + cap."""
     headers = {}
     if NVD_API_KEY:
         headers["apiKey"] = NVD_API_KEY
     try:
-        response = requests.get(
-            NVD_API_BASE,
-            headers=headers,
-            params=params,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
+        response = requests.get(NVD_API_BASE, headers=headers, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
     except Exception as e:
         logger.warning("cve_lookup: NVD request failed: %s", e)
         return []
@@ -204,18 +245,8 @@ def _query_nvd(keyword_search: str) -> list[CVEResult]:
     if not NVD_API_KEY:
         time.sleep(NVD_RATE_LIMIT_DELAY)
 
-    if response.status_code == 503:
-        logger.warning("cve_lookup: NVD service unavailable (503)")
-        return []
-    if response.status_code == 429:
-        logger.warning("cve_lookup: NVD rate limit exceeded (429)")
-        return []
-    if response.status_code >= 400:
-        logger.warning(
-            "cve_lookup: NVD returned status %s for query %s",
-            response.status_code,
-            keyword_search,
-        )
+    if response.status_code in (429, 503) or response.status_code >= 400:
+        logger.warning("cve_lookup: NVD returned status %s for %s", response.status_code, label)
         return []
 
     try:
@@ -230,9 +261,30 @@ def _query_nvd(keyword_search: str) -> list[CVEResult]:
         if cve_result is not None:
             results.append(cve_result)
 
+    # Only used for keyword queries: drop matches that don't mention the product.
+    if product_token:
+        token = product_token.lower()
+        filtered = [cve for cve in results if token in cve.description.lower()]
+        if filtered:
+            results = filtered
+
     results.sort(key=lambda item: item.cvss_score or 0.0, reverse=True)
-    logger.info("cve_lookup: found %d CVEs for query %s", len(results), keyword_search)
+    results = results[:MAX_CVES_PER_SERVICE]
+    logger.info("cve_lookup: found %d CVEs for %s", len(results), label)
     return results
+
+
+def _query_nvd(keyword_search: str, product_token: str = "") -> list[CVEResult]:
+    """Keyword-search NVD; filter by product token to cut false positives."""
+    params = {"keywordSearch": keyword_search, "resultsPerPage": NVD_RESULTS_PER_PAGE}
+    return _nvd_request(params, product_token, label=f"keyword '{keyword_search}'")
+
+
+def _query_nvd_cpe(vendor: str, product: str, version: str) -> list[CVEResult]:
+    """Version-aware NVD match using a CPE virtualMatchString (no product filter)."""
+    cpe = f"cpe:2.3:a:{vendor}:{product}:{version}:*:*:*:*:*:*:*"
+    params = {"virtualMatchString": cpe, "resultsPerPage": NVD_RESULTS_PER_PAGE}
+    return _nvd_request(params, product_token="", label=f"cpe '{cpe}'")
 
 
 def lookup_cves(service: str, version: str) -> list[CVEResult]:
@@ -259,10 +311,19 @@ def _lookup_cves_cached(normalized_service: str, normalized_version: str) -> lis
         normalized_service,
         normalized_version,
     )
+    # Prefer precise, version-aware CPE matching for known products; fall back
+    # to keyword search when the product isn't in the CPE map or returns nothing.
+    cpe = _cpe_for(normalized_service)
+    if cpe:
+        cpe_results = _query_nvd_cpe(cpe[0], cpe[1], normalized_version)
+        if cpe_results:
+            return cpe_results
+
     keyword_search = _build_keyword_search(normalized_service, normalized_version)
     if not keyword_search:
         return []
-    return _query_nvd(keyword_search)
+    product_token = normalized_service.split()[0] if normalized_service else ""
+    return _query_nvd(keyword_search, product_token=product_token)
 
 
 if __name__ == "__main__":

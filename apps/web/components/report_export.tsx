@@ -28,9 +28,6 @@ export default function ReportExport({ report, target }: ReportExportProps) {
 			a.remove()
 			URL.revokeObjectURL(url)
 		} catch (err) {
-			// swallow - downloads rarely fail in browser environments
-			// consumer can add toast handling if desired
-			// eslint-disable-next-line no-console
 			console.error("Failed to download JSON report", err)
 		}
 	}, [report, target])
@@ -41,18 +38,18 @@ export default function ReportExport({ report, target }: ReportExportProps) {
 		const cleanup = () => {
 			try {
 				document.body.classList.remove("print-report")
-				delete (document.body as any).dataset.target
-				delete (document.body as any).dataset.date
+				document.body.removeAttribute("data-target")
+				document.body.removeAttribute("data-date")
 				window.removeEventListener("afterprint", cleanup)
-			} catch (e) {
+			} catch {
 				// noop
 			}
 		}
 
 		// Set attributes on the body so the print stylesheet can read them
 		document.body.classList.add("print-report")
-		;(document.body as any).dataset.target = target
-		;(document.body as any).dataset.date = date
+		document.body.dataset.target = target
+		document.body.dataset.date = date
 
 		// Cleanup after the print dialog closes
 		window.addEventListener("afterprint", cleanup)
@@ -61,7 +58,6 @@ export default function ReportExport({ report, target }: ReportExportProps) {
 		try {
 			window.print()
 		} catch (err) {
-			// eslint-disable-next-line no-console
 			console.error("window.print failed", err)
 			cleanup()
 		}

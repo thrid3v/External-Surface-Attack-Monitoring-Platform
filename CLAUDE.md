@@ -1,0 +1,121 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+EASM (External Attack Surface Management) — a platform for discovering and assessing an organization's external attack surface. Scans run as async Celery tasks through a modular pipeline: port scanning → CVE lookup → DNS enumeration → OSINT → HTTP/TLS probing → risk scoring.
+
+## Repository Structure
+
+```
+easm/
+├── apps/
+│   ├── web/            # Next.js 16 frontend (React 19, TypeScript, Tailwind 4)
+│   └── api/            # FastAPI backend (Python)
+├── packages/
+│   └── scanner_core/   # Shared Python scanning modules (installable package)
+└── docker-compose.yml  # PostgreSQL 16 + Redis 7
+```
+
+## Development Commands
+
+### Infrastructure
+```bash
+docker compose up -d    # Start PostgreSQL (5432) and Redis (6379)
+```
+
+### Frontend (`apps/web/`)
+```bash
+npm run dev             # Dev server at localhost:3000
+npm run build
+npm run lint
+```
+
+### Backend (`apps/api/`)
+```bash
+# One-time setup
+python -m venv venv
+pip install -r requirements.txt
+
+# Run API
+uvicorn main:app --reload --port 8000
+
+# Run Celery worker (Windows requires -P solo)
+celery -A workers.scan_worker worker --loglevel=info -P solo
+# Linux/macOS:
+celery -A workers.scan_worker worker --loglevel=info
+```
+
+### Tests (`packages/scanner_core/`)
+```bash
+pytest packages/scanner_core/tests/
+```
+
+### Database Migrations (`apps/api/`)
+```bash
+alembic upgrade head
+alembic revision --autogenerate -m "description"
+```
+
+## Environment Setup
+
+Copy `.env.example` to `apps/api/.env`:
+```
+DATABASE_URL=postgresql://user:password@localhost:5432/easm
+REDIS_URL=redis://localhost:6379/0
+SHODAN_API_KEY=        # Optional — OSINT fetcher degrades gracefully
+NVD_API_KEY=           # Optional — CVE lookup degrades gracefully
+FRONTEND_URL=http://localhost:3000
+SCAN_TIMEOUT=300
+```
+
+Frontend uses `NEXT_PUBLIC_API_URL` (defaults to same origin if unset).
+
+## Architecture
+
+### Scan Pipeline
+
+Scans are triggered via `POST /api/scans`, which persists a `Scan` record and enqueues a Celery task. The worker in `apps/api/workers/scan_worker.py` runs modules sequentially per `MODULE_ORDER` in `apps/api/constants.py`:
+
+```python
+MODULE_ORDER = ["port_scanner", "cve_lookup", "dns_enum", "osint_fetcher",
+                "service_probe", "web_audit", "takeover_check", "email_audit", "nuclei_scan"]
+```
+
+Recurring scans and a stuck-scan reaper run on Celery **beat** (`enqueue_due_scans`,
+`reap_stuck_scans`). Change-detection alerts are delivered out-of-band by the
+`deliver_alert` task to each user's enabled channels (email/webhook), configured
+per user via `routers/settings.py` (`notification_settings` table).
+
+Each module is imported from `packages/scanner_core/` and returns Pydantic models defined in `packages/scanner_core/models.py`. Results are serialized to `result_json` (Text column) on the `Scan` DB record. `current_module` and `status` are updated live so the frontend can poll progress.
+
+### Frontend Data Flow
+
+- `apps/web/lib/api.ts` — all API calls (`startScan`, `getRecentScans`, `getScanStatus`, `getScanReport`)
+- `apps/web/app/page.tsx` — homepage with scan initiation and recent scans list
+- `apps/web/app/scan/[id]/page.tsx` — polls `getScanStatus` until complete, then renders report panels
+- Report panels (`port_table`, `CVE_list`, `HTTP_panel`, `OSINT_panel`, `risk_score`) each receive their slice of `ScanReport`
+
+### Backend API
+
+- `apps/api/main.py` — FastAPI app, CORS setup, router registration
+- `apps/api/auth.py` — BFF auth: the API is fail-closed behind `X-Internal-Secret` + `X-User-Email` (the Next.js server injects these); `get_current_user` returns the acting email for ownership scoping
+- `apps/api/routers/scans.py` — scan CRUD, status, diff, **cancel** (`POST /{id}/cancel`, cooperative)
+- `apps/api/routers/{targets,schedules,alerts,settings}.py` — target aggregation/history, recurring schedules (+ `POST /{id}/run`), change-detection alerts, and per-user notification settings (+ `POST /notifications/test`)
+- `apps/api/services/net_guard.py` — shared SSRF guard. **All scan-target validation goes through `validate_scan_target`** (used by both `scans.py` and `schedules.py`); it cleans the target and rejects private/internal/cloud-metadata hosts unless `ALLOW_PRIVATE_TARGETS=true`. The webhook delivery guard reuses its IP helpers.
+- `apps/api/services/rate_limit.py` — per-user scan rate limiting (`MAX_CONCURRENT_SCANS_PER_USER`, `MAX_SCANS_PER_HOUR`). Enforced on user-initiated scan creation + schedule run-now; the beat dispatcher (`enqueue_due_scans`) intentionally bypasses it.
+- `apps/api/db/models.py` — SQLAlchemy `Scan` model; `.result` property auto-parses `result_json`
+- `apps/api/deps.py` — DB session dependency injection
+- Database is auto-created on startup via `Base.metadata.create_all()` if `DATABASE_URL` is set; Alembic handles schema migrations
+
+### Scanner Core Package
+
+`packages/scanner_core/` is an installable Python package (listed in `apps/api/requirements.txt` as a path dependency). Modules: `port_scanner`, `cve_lookup`, `dns_enum`, `osint_fetcher`, `service_probe`, `report_gen`. All public return types are Pydantic models from `scanner_core.models`.
+
+## Key Constraints
+
+- **Scan authorization**: The API requires `i_own_this_target: true` in the scan request body — this is a legal acknowledgment that the requester owns the target.
+- **Windows Celery**: Must use `-P solo` pool on Windows (no fork support). Run **beat as a separate process** (`celery -A workers.scan_worker beat`) — the worker's embedded `-B` flag is unsupported on Windows.
+- **Next.js version note**: `apps/web/AGENTS.md` documents breaking changes between Next.js versions — read it before modifying the frontend routing or data-fetching patterns.
+- **DB initialization**: `apps/api/main.py` wraps `create_all()` in a try/except so the app starts without a DB (useful for running Alembic standalone). Don't remove that guard.

@@ -64,9 +64,35 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT_RANGE = "1-1000"
-SCAN_TIMEOUT_SECONDS = 120
-NMAP_HOST_TIMEOUT_SECONDS = 120
+# Phase 1 (discovery) finds open ports WITHOUT version detection so the slow
+# -sV probes never run against the full range. Phase 2 runs -sV against only
+# the handful of discovered open ports, which is cheap.
+DISCOVERY_TIMEOUT_SECONDS = 120
+# Version detection runs on a handful of ports, so it should be quick. Cap it
+# tightly: if it can't finish, we keep the discovered ports unenriched rather
+# than burning the budget.
+VERSION_TIMEOUT_SECONDS = 60
 NMAP_MAX_RETRIES = 2
+# Discovery must make forward progress on hosts with many filtered ports
+# (firewalled internet targets). nmap's congestion control otherwise ramps too
+# slowly and a full 1-1000 sweep aborts at the host-timeout with zero results —
+# which surfaced as UNKNOWN-risk, empty reports for real hosts like testfire.net.
+# A floor packet rate plus a single retry keeps that sweep to a few seconds while
+# still reliably finding the open ports.
+DISCOVERY_MAX_RETRIES = 1
+DISCOVERY_MIN_RATE = 500
+# If discovery burns ~all of its host-timeout and still finds nothing, nmap
+# almost certainly aborted the host mid-scan — the result is unreliable rather
+# than a genuine "no open ports".
+INCOMPLETE_ELAPSED_RATIO = 0.95
+
+
+class PortScanIncompleteError(Exception):
+    """Raised when an nmap host-timeout aborts the scan.
+
+    The caller (worker) records this as a module error so an incomplete scan is
+    surfaced instead of being silently scored as a clean target with zero ports.
+    """
 
 
 def _is_nmap_available() -> bool:
@@ -194,8 +220,37 @@ def _parse_nmap_ports(scan_data: dict[str, Any], target: str) -> list[PortResult
 
 _parse_nmap_output = _parse_nmap_ports
 
+
+def _parse_ports(scan_data: Any, scanner: Any, target: str) -> list[PortResult]:
+    """Parse open ports from a scan, preferring the returned dict, falling back
+    to the scanner object (matches how python-nmap exposes results)."""
+    if isinstance(scan_data, dict) and scan_data:
+        return _parse_nmap_ports(scan_data, target)
+    return _parse_nmap_ports(scanner, target)
+
+
+def _scanstats_elapsed(scan_data: Any) -> float | None:
+    """Return nmap's reported elapsed scan time in seconds, if available."""
+    if not isinstance(scan_data, dict):
+        return None
+    try:
+        return float(scan_data.get("nmap", {}).get("scanstats", {}).get("elapsed"))
+    except (TypeError, ValueError):
+        return None
+
+
 def scan_ports(target: str, port_range: str = DEFAULT_PORT_RANGE) -> list[PortResult]:
-    """Run nmap against target and return a list of open PortResult objects."""
+    """Run a two-phase nmap scan and return a list of open PortResult objects.
+
+    Phase 1 discovers open ports quickly (no -sV); phase 2 runs version detection
+    against only those ports. This avoids -sV sweeping the whole range and hitting
+    the host-timeout — which previously returned zero ports (a false negative that
+    scored real targets as MINIMAL risk).
+
+    Raises:
+        PortScanIncompleteError: when discovery appears to have been aborted by
+            the host-timeout, so the caller can flag the scan as unreliable.
+    """
     if not _is_nmap_available():
         return []
 
@@ -208,31 +263,15 @@ def scan_ports(target: str, port_range: str = DEFAULT_PORT_RANGE) -> list[PortRe
         logger.error("port_scanner: failed to initialize nmap PortScanner: %s", e)
         return []
 
-    arguments = (
-        f"-sV -Pn --host-timeout {NMAP_HOST_TIMEOUT_SECONDS}s "
-        f"--max-retries {NMAP_MAX_RETRIES}"
+    # --- Phase 1: fast discovery (no version detection) ---------------------
+    discovery_args = (
+        f"-Pn -T4 --host-timeout {DISCOVERY_TIMEOUT_SECONDS}s "
+        f"--max-retries {DISCOVERY_MAX_RETRIES} --min-rate {DISCOVERY_MIN_RATE}"
     )
-    logger.debug(
-        "port_scanner: scanning target=%s ports=%s args=%s",
-        target,
-        port_range,
-        arguments,
-    )
-
     try:
-        scan_data = scanner.scan(hosts=target, ports=port_range, arguments=arguments)
-        if isinstance(scan_data, dict) and scan_data:
-            ports = _parse_nmap_ports(scan_data, target)
-        else:
-            ports = _parse_nmap_ports(scanner, target)
-        logger.info(
-            "port_scanner: found %d open ports for %s",
-            len(ports),
-            target,
-        )
-        return ports
+        disc_data = scanner.scan(hosts=target, ports=port_range, arguments=discovery_args)
     except PortScannerError as e:
-        logger.warning("port_scanner: nmap scan failed for %s: %s", target, e)
+        logger.warning("port_scanner: discovery scan failed for %s: %s", target, e)
         return []
     except FileNotFoundError as e:
         logger.error("port_scanner: nmap binary missing during scan for %s: %s", target, e)
@@ -240,6 +279,42 @@ def scan_ports(target: str, port_range: str = DEFAULT_PORT_RANGE) -> list[PortRe
     except Exception as e:
         logger.error("port_scanner: unexpected error scanning %s: %s", target, e)
         return []
+
+    discovered = _parse_ports(disc_data, scanner, target)
+    open_ports = sorted({p.port for p in discovered})
+
+    if not open_ports:
+        elapsed = _scanstats_elapsed(disc_data)
+        if elapsed is not None and elapsed >= DISCOVERY_TIMEOUT_SECONDS * INCOMPLETE_ELAPSED_RATIO:
+            raise PortScanIncompleteError(
+                f"nmap host-timeout reached after {elapsed:.0f}s scanning {target}; "
+                "results are unreliable"
+            )
+        logger.info("port_scanner: no open ports for %s", target)
+        return []
+
+    # --- Phase 2: version detection on the discovered ports only ------------
+    ports_csv = ",".join(str(p) for p in open_ports)
+    version_args = (
+        f"-sV -Pn -T4 --host-timeout {VERSION_TIMEOUT_SECONDS}s "
+        f"--max-retries {NMAP_MAX_RETRIES}"
+    )
+    version_by_port: dict[int, PortResult] = {}
+    try:
+        ver_data = scanner.scan(hosts=target, ports=ports_csv, arguments=version_args)
+        for vp in _parse_ports(ver_data, scanner, target):
+            version_by_port[vp.port] = vp
+    except Exception as e:
+        logger.warning("port_scanner: version detection failed for %s: %s", target, e)
+
+    # Discovery is the source of truth for which ports are open; version
+    # detection only enriches. A version-phase timeout/failure must NEVER drop a
+    # discovered open port — that was the false-negative that scored real targets
+    # as MINIMAL risk.
+    base_by_port = {p.port: p for p in discovered}
+    results = [version_by_port.get(port, base_by_port[port]) for port in open_ports]
+    logger.info("port_scanner: found %d open ports for %s", len(results), target)
+    return results
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
-from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
@@ -49,6 +49,7 @@ class Scan(Base):
     __tablename__ = "scans"
 
     id = Column(String(36), primary_key=True, nullable=False)
+    owner_email = Column(String(320), nullable=True, index=True)
     target = Column(String(512), nullable=False, index=True)
     status = Column(String(20), nullable=False, index=True)
     port_range = Column(String(100), nullable=True)
@@ -78,3 +79,83 @@ class Scan(Base):
 
     def __repr__(self) -> str:
         return f"<Scan id={self.id} target={self.target} status={self.status}>"
+
+
+class Schedule(Base):
+    """A recurring scan configuration owned by a user."""
+
+    __tablename__ = "schedules"
+
+    id = Column(String(36), primary_key=True, nullable=False)
+    owner_email = Column(String(320), nullable=False, index=True)
+    target = Column(String(512), nullable=False)
+    port_range = Column(String(100), nullable=True)
+    profile = Column(String(50), nullable=True)
+    modules = Column(Text, nullable=True)  # JSON-encoded list of module names, or NULL for all
+    interval_minutes = Column(Integer, nullable=False, default=1440)
+    enabled = Column(Boolean, nullable=False, default=True)
+    next_run_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    @property
+    def modules_list(self) -> list | None:
+        if not self.modules:
+            return None
+        try:
+            return json.loads(self.modules)
+        except json.JSONDecodeError:
+            return None
+
+    def __repr__(self) -> str:
+        return f"<Schedule id={self.id} target={self.target} every={self.interval_minutes}m>"
+
+
+class Alert(Base):
+    """A change-detection alert raised when a re-scan surfaces new risk."""
+
+    __tablename__ = "alerts"
+
+    id = Column(String(36), primary_key=True, nullable=False)
+    owner_email = Column(String(320), nullable=False, index=True)
+    target = Column(String(512), nullable=False)
+    scan_id = Column(String(36), nullable=True)
+    type = Column(String(50), nullable=False)
+    severity = Column(String(20), nullable=False, default="info")
+    message = Column(Text, nullable=False)
+    read = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+    def __repr__(self) -> str:
+        return f"<Alert id={self.id} target={self.target} type={self.type}>"
+
+
+class NotificationSettings(Base):
+    """Per-user out-of-band alert delivery preferences.
+
+    SMTP transport credentials live server-side in the environment; this row
+    only holds the per-user routing (which channels, where, and the minimum
+    severity worth delivering).
+    """
+
+    __tablename__ = "notification_settings"
+
+    id = Column(String(36), primary_key=True, nullable=False)
+    owner_email = Column(String(320), nullable=False, unique=True, index=True)
+    email_enabled = Column(Boolean, nullable=False, default=False)
+    # Recipient override; when NULL, alerts are emailed to owner_email.
+    email_address = Column(String(320), nullable=True)
+    webhook_enabled = Column(Boolean, nullable=False, default=False)
+    webhook_url = Column(String(1024), nullable=True)
+    # Minimum severity that triggers delivery: info < warning < high < critical.
+    min_severity = Column(String(20), nullable=False, default="warning")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<NotificationSettings owner={self.owner_email}>"
